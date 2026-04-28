@@ -32,3 +32,6 @@ go.work.sum
 # .idea/
 # .vscode/
 
+
+# added by lint-install
+out/
