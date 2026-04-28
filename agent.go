@@ -140,7 +140,7 @@ func (a *Agent) Run(ctx context.Context, prompt, workdir string, opts RunOptions
 
 	var sigs *piSignals
 	if Base(a.Provider) == "pi" {
-		sigs = newPiSignals()
+		sigs = newPiSignals(pipes.stdin, a.logger())
 		go a.feedPi(ctx, pipes.stdin, prompt, opts.SessionID, sigs)
 	} else {
 		go a.feedStdin(pipes.stdin, prompt)
