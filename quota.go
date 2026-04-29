@@ -9,7 +9,7 @@ import (
 
 // DefaultCooldown is the cooldown applied when a quota error has no parseable
 // reset time.
-const DefaultCooldown = 45 * time.Minute
+const DefaultCooldown = 60 * time.Minute
 
 // QuotaError indicates a provider failed because of quota or rate-limit
 // exhaustion. It is kept distinct from generic provider failures so callers

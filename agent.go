@@ -22,7 +22,7 @@ var ErrIdleTimeout = errors.New("idle timeout")
 
 // Default time limits used when an Agent leaves a field zero.
 const (
-	defaultProbeTimeout      = 75 * time.Second
+	defaultProbeTimeout      = 120 * time.Second
 	defaultLocalProbeTimeout = 5 * time.Minute
 )
 
