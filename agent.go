@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -418,54 +419,77 @@ func (a *Agent) runProbe(ctx context.Context) error {
 		slog.Int("pid", cmd.Process.Pid))
 
 	go a.feedStdin(stdin, a.probePrompt())
+	stdoutTail := newProbeOutput()
 	stderrTail := &strings.Builder{}
-	stderrDone := streamStderr(stderrTail, stderr, nil)
-
-	got := make(chan bool, 1)
+	stdoutDone := make(chan error, 1)
 	go func() {
-		buf := make([]byte, 1)
-		_, readErr := stdout.Read(buf)
-		got <- readErr == nil
+		_, copyErr := io.Copy(stdoutTail, stdout)
+		stdoutDone <- copyErr
 	}()
+	stderrDone := streamStderr(stderrTail, stderr, nil)
 
 	timeout := a.probeTimeout()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
-	case ok := <-got:
-		if ok {
-			killAndReap(cmd)
-			<-stderrDone
+	case <-stdoutTail.first:
+		killProcess(cmd)
+		_ = cmd.Wait() //nolint:errcheck // killed after successful first byte
+		<-stdoutDone
+		<-stderrDone
+		a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
+		return nil
+	case <-stdoutDone:
+		waitErr := cmd.Wait()
+		<-stderrDone
+		if strings.TrimSpace(stdoutTail.String()) != "" {
 			a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
 			return nil
 		}
-		waitErr := cmd.Wait()
-		<-stderrDone
-		return a.probeFailureError(cmd, waitErr, stderrTail.String())
+		return a.probeFailureError(cmd, waitErr, stdoutTail.String(), stderrTail.String())
 	case <-timer.C:
-		killAndReap(cmd)
+		killProcess(cmd)
+		waitErr := cmd.Wait()
+		<-stdoutDone
 		<-stderrDone
-		return fmt.Errorf("probe %s %s: timed out after %v", a.Provider, describeCmd(cmd), timeout)
+		return a.probeTimeoutError(cmd, waitErr, timeout, stdoutTail.String(), stderrTail.String())
 	case <-ctx.Done():
-		killAndReap(cmd)
+		killProcess(cmd)
+		waitErr := cmd.Wait()
+		<-stdoutDone
 		<-stderrDone
-		return ctx.Err()
+		return a.probeCancelledError(cmd, waitErr, ctx.Err(), stdoutTail.String(), stderrTail.String())
 	}
 }
 
-func (a *Agent) probeFailureError(cmd *exec.Cmd, waitErr error, stderr string) error {
-	detail := strings.TrimSpace(stderr)
-	if waitErr != nil {
-		if detail != "" {
-			return fmt.Errorf("probe %s %s failed before output: %w:\n%s", a.Provider, describeCmd(cmd), waitErr, detail)
-		}
-		return fmt.Errorf("probe %s %s failed before output: %w", a.Provider, describeCmd(cmd), waitErr)
-	}
+func (a *Agent) probeFailureError(cmd *exec.Cmd, waitErr error, stdout, stderr string) error {
+	status := probeExitStatus(waitErr)
+	detail := probeOutputDetail(stdout, stderr)
 	if detail != "" {
-		return fmt.Errorf("probe %s %s exited without output:\n%s", a.Provider, describeCmd(cmd), detail)
+		return fmt.Errorf("probe %s %s %s before producing stdout:%s", a.Provider, describeCmd(cmd), status, detail)
 	}
-	return fmt.Errorf("probe %s %s: process exited without output", a.Provider, describeCmd(cmd))
+	return fmt.Errorf("probe %s %s %s before producing stdout", a.Provider, describeCmd(cmd), status)
+}
+
+func (a *Agent) probeTimeoutError(cmd *exec.Cmd, waitErr error, timeout time.Duration, stdout, stderr string) error {
+	detail := probeOutputDetail(stdout, stderr)
+	if detail != "" {
+		return fmt.Errorf("probe %s %s timed out after %v; killed process (%s):%s",
+			a.Provider, describeCmd(cmd), timeout, probeExitStatus(waitErr), detail)
+	}
+	return fmt.Errorf("probe %s %s timed out after %v; killed process (%s)",
+		a.Provider, describeCmd(cmd), timeout, probeExitStatus(waitErr))
+}
+
+func (a *Agent) probeCancelledError(cmd *exec.Cmd, waitErr, ctxErr error, stdout, stderr string) error {
+	detail := probeOutputDetail(stdout, stderr)
+	if detail != "" {
+		return fmt.Errorf("probe %s %s cancelled: %w; killed process (%s):%s",
+			a.Provider, describeCmd(cmd), ctxErr, probeExitStatus(waitErr), detail)
+	}
+	return fmt.Errorf("probe %s %s cancelled: %w; killed process (%s)",
+		a.Provider, describeCmd(cmd), ctxErr, probeExitStatus(waitErr))
 }
 
 // probePrompt is the trivial input written to stdin during Probe. Pi expects
@@ -559,6 +583,75 @@ func cmdWorkDir(cmd *exec.Cmd) string {
 		return ""
 	}
 	return wd
+}
+
+type probeOutput struct {
+	first chan struct{}
+	once  sync.Once
+	mu    sync.Mutex
+	buf   strings.Builder
+}
+
+func newProbeOutput() *probeOutput {
+	return &probeOutput{first: make(chan struct{})}
+}
+
+func (p *probeOutput) Write(b []byte) (int, error) {
+	n := len(b)
+	if len(b) > 0 {
+		p.once.Do(func() { close(p.first) })
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.buf.Len() < maxStderrBytes {
+		remaining := maxStderrBytes - p.buf.Len()
+		if len(b) > remaining {
+			b = b[:remaining]
+		}
+		p.buf.Write(b)
+	}
+	return n, nil
+}
+
+func (p *probeOutput) String() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.buf.String()
+}
+
+func probeExitStatus(err error) string {
+	if err == nil {
+		return "exited with code 0"
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ProcessState != nil {
+		if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok {
+			if status.Signaled() {
+				return "terminated by signal " + status.Signal().String()
+			}
+		}
+		return fmt.Sprintf("exited with code %d", exitErr.ProcessState.ExitCode())
+	}
+	return "exited with error: " + err.Error()
+}
+
+func probeOutputDetail(stdout, stderr string) string {
+	var b strings.Builder
+	if out := strings.TrimSpace(stdout); out != "" {
+		b.WriteString("\nstdout:\n")
+		b.WriteString(out)
+	}
+	if errOut := strings.TrimSpace(stderr); errOut != "" {
+		b.WriteString("\nstderr:\n")
+		b.WriteString(errOut)
+	}
+	return b.String()
+}
+
+func killProcess(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill() //nolint:errcheck // best effort
+	}
 }
 
 func killAndReap(cmd *exec.Cmd) {

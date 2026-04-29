@@ -156,10 +156,17 @@ func TestProbeFailureCapturesStderrAndExitStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, want := range []string{"failed before output", "exit status 42", "auth failed", `"sh" "-c"`} {
+	for _, want := range []string{"exited with code 42", "stderr:", "auth failed", `"sh" "-c"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q should contain %q", err, want)
 		}
+	}
+}
+
+func TestProbeFailureCapturesStdout(t *testing.T) {
+	a := &Agent{Provider: "mock", NewCmd: shellCmd(`printf 'partial stdout'`)}
+	if err := a.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe should accept stdout as success: %v", err)
 	}
 }
 
