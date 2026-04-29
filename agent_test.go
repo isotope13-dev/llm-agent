@@ -150,6 +150,19 @@ func TestProbeNoOutput(t *testing.T) {
 	}
 }
 
+func TestProbeFailureCapturesStderrAndExitStatus(t *testing.T) {
+	a := &Agent{Provider: "mock", NewCmd: shellCmd(`echo "auth failed" >&2; exit 42`)}
+	err := a.Probe(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	for _, want := range []string{"failed before output", "exit status 42", "auth failed", `"sh" "-c"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should contain %q", err, want)
+		}
+	}
+}
+
 func TestProbeTimeout(t *testing.T) {
 	a := &Agent{
 		Provider:     "mock",

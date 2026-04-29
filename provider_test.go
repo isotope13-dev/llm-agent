@@ -13,8 +13,8 @@ func TestBaseAndModel(t *testing.T) {
 		{"gemini:gemini-2.5-pro", "gemini", "gemini-2.5-pro", false},
 		{"opencode", "opencode", "", true},
 		{"opencode:kimi-k2", "opencode", "kimi-k2", true},
-		{"crush:some-model", "crush", "some-model", true},
-		{"codex-oss", "codex-oss", "", true},
+		{"pi", "pi", "", true},
+		{"pi:some-model", "pi", "some-model", true},
 		{"codex", "codex", "", false},
 	}
 	for _, tt := range tests {

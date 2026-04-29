@@ -8,7 +8,7 @@ import (
 
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
 // IncludeDirs, Model, TmpDir, and Env. It supports the providers cyclotron
-// uses today: claude, gemini, codex, codex-oss, opencode, crush, cursor.
+// uses today: claude, gemini, codex, opencode, pi, cursor.
 //
 // The returned command:
 //   - reads its prompt from stdin (cursor reads PROMPT.md, written by Run);
@@ -52,19 +52,6 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		cmd.Env = agent.processEnv()
 		return cmd, nil
 
-	case "codex-oss":
-		args := []string{
-			"--oss", "-m", "gpt-oss:120b",
-			"exec", "--json", "--full-auto", "--sandbox", "danger-full-access",
-		}
-		for _, d := range agent.IncludeDirs {
-			args = append(args, "--add-dir", d)
-		}
-		args = append(args, "-")
-		cmd := exec.CommandContext(ctx, "codex", args...)
-		cmd.Env = agent.processEnv()
-		return cmd, nil
-
 	case "opencode":
 		args := []string{"run", "--format", "json"}
 		if model != "" {
@@ -72,16 +59,6 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		}
 		cmd := exec.CommandContext(ctx, "opencode", args...)
 		cmd.Env = agent.processEnv()
-		return cmd, nil
-
-	case "crush":
-		args := []string{"run"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		args = append(args, "-")
-		cmd := exec.CommandContext(ctx, "crush", args...)
-		cmd.Env = agent.processEnv("CRUSH_YOLO=1")
 		return cmd, nil
 
 	case "pi":
@@ -124,7 +101,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 // Notes:
 //   - gemini uses session indexes (not IDs) that collide across sibling
 //     workers sharing a workdir, so it is intentionally excluded;
-//   - codex and crush emit no resumable session ID.
+//   - codex emits no resumable session ID.
 func resumeArgs(provider, sessionID string) []string {
 	if sessionID == "" {
 		return nil

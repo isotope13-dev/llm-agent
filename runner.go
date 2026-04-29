@@ -32,7 +32,7 @@ type Runner struct {
 	Agents []*Agent
 
 	// LocalCooldown overrides the blacklist duration for local providers
-	// (opencode, crush, codex-oss). Zero means 15 min.
+	// (opencode, pi). Zero means 15 min.
 	LocalCooldown time.Duration
 
 	mu sync.Mutex

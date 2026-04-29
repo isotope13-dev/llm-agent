@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +88,7 @@ type RunOptions struct {
 	OnStderr func(line string)
 
 	// SessionID, if non-empty, asks the provider to resume that session.
-	// Providers that don't support resumption (codex, crush, gemini) ignore
+	// Providers that don't support resumption (codex, gemini) ignore
 	// this field.
 	SessionID string
 }
@@ -388,6 +389,15 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", a.Provider, err)
 	}
+	a.logger().Info("llmagent probe starting",
+		slog.String("provider", a.Provider),
+		slog.Any("argv", cmd.Args),
+		slog.String("workdir", cmdWorkDir(cmd)),
+		slog.String("home", cmdEnvValue(cmd, "HOME")),
+		slog.String("xdg_data_home", cmdEnvValue(cmd, "XDG_DATA_HOME")),
+		slog.String("xdg_state_home", cmdEnvValue(cmd, "XDG_STATE_HOME")),
+		slog.String("xdg_cache_home", cmdEnvValue(cmd, "XDG_CACHE_HOME")),
+		slog.String("tmpdir", cmdEnvValue(cmd, "TMPDIR")))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("probe %s stdin: %w", a.Provider, err)
@@ -396,11 +406,20 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("probe %s stdout: %w", a.Provider, err)
 	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("probe %s start: %w", a.Provider, err)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("probe %s stderr: %w", a.Provider, err)
 	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("probe %s start %s: %w", a.Provider, describeCmd(cmd), err)
+	}
+	a.logger().Info("llmagent probe spawned",
+		slog.String("provider", a.Provider),
+		slog.Int("pid", cmd.Process.Pid))
 
 	go a.feedStdin(stdin, a.probePrompt())
+	stderrTail := &strings.Builder{}
+	stderrDone := streamStderr(stderrTail, stderr, nil)
 
 	got := make(chan bool, 1)
 	go func() {
@@ -415,19 +434,38 @@ func (a *Agent) runProbe(ctx context.Context) error {
 
 	select {
 	case ok := <-got:
-		killAndReap(cmd)
 		if ok {
+			killAndReap(cmd)
+			<-stderrDone
 			a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
 			return nil
 		}
-		return fmt.Errorf("probe %s: process exited without output", a.Provider)
+		waitErr := cmd.Wait()
+		<-stderrDone
+		return a.probeFailureError(cmd, waitErr, stderrTail.String())
 	case <-timer.C:
 		killAndReap(cmd)
-		return fmt.Errorf("probe %s: timed out after %v", a.Provider, timeout)
+		<-stderrDone
+		return fmt.Errorf("probe %s %s: timed out after %v", a.Provider, describeCmd(cmd), timeout)
 	case <-ctx.Done():
 		killAndReap(cmd)
+		<-stderrDone
 		return ctx.Err()
 	}
+}
+
+func (a *Agent) probeFailureError(cmd *exec.Cmd, waitErr error, stderr string) error {
+	detail := strings.TrimSpace(stderr)
+	if waitErr != nil {
+		if detail != "" {
+			return fmt.Errorf("probe %s %s failed before output: %w:\n%s", a.Provider, describeCmd(cmd), waitErr, detail)
+		}
+		return fmt.Errorf("probe %s %s failed before output: %w", a.Provider, describeCmd(cmd), waitErr)
+	}
+	if detail != "" {
+		return fmt.Errorf("probe %s %s exited without output:\n%s", a.Provider, describeCmd(cmd), detail)
+	}
+	return fmt.Errorf("probe %s %s: process exited without output", a.Provider, describeCmd(cmd))
 }
 
 // probePrompt is the trivial input written to stdin during Probe. Pi expects
@@ -484,6 +522,43 @@ func (a *Agent) processEnv(extra ...string) []string {
 	}
 	env = append(env, a.Env...)
 	return append(env, extra...)
+}
+
+func describeCmd(cmd *exec.Cmd) string {
+	if cmd == nil || len(cmd.Args) == 0 {
+		return "<unknown command>"
+	}
+	quoted := make([]string, len(cmd.Args))
+	for i, arg := range cmd.Args {
+		quoted[i] = strconv.Quote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func cmdEnvValue(cmd *exec.Cmd, key string) string {
+	prefix := key + "="
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	value := ""
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			value = strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return value
+}
+
+func cmdWorkDir(cmd *exec.Cmd) string {
+	if cmd != nil && cmd.Dir != "" {
+		return cmd.Dir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }
 
 func killAndReap(cmd *exec.Cmd) {

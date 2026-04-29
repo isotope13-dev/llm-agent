@@ -24,7 +24,7 @@ func Model(provider string) string {
 // needs a longer probe budget and shorter blacklist than cloud agents.
 func IsLocal(provider string) bool {
 	switch Base(provider) {
-	case "opencode", "crush", "codex-oss":
+	case "opencode", "pi":
 		return true
 	}
 	return false

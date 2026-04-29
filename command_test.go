@@ -17,11 +17,8 @@ func TestDefaultCommand(t *testing.T) {
 		{"gemini", "gemini", []string{"--yolo", "--output-format", "stream-json"}, []string{"--model"}},
 		{"gemini:gemini-2.5-pro", "gemini", []string{"--model", "gemini-2.5-pro"}, nil},
 		{"codex", "codex", []string{"exec", "--json", "--full-auto"}, nil},
-		{"codex-oss", "codex", []string{"--oss", "-m", "gpt-oss:120b"}, nil},
 		{"opencode", "opencode", []string{"run", "--format", "json"}, []string{"--model"}},
 		{"opencode:kimi-k2", "opencode", []string{"--model", "kimi-k2"}, nil},
-		{"crush", "crush", []string{"run"}, []string{"--model"}},
-		{"crush:m1", "crush", []string{"--model", "m1"}, nil},
 		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},
 		{"cursor:sonnet-4", "agent", []string{"--model", "sonnet-4"}, nil},
 		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session"}},
@@ -98,7 +95,6 @@ func TestResumeArgs(t *testing.T) {
 		{"cursor", "abc", []string{"--resume", "abc"}},
 		{"gemini", "abc", nil},
 		{"codex", "abc", nil},
-		{"crush", "abc", nil},
 		{"claude", "", nil},
 	}
 	for _, tt := range tests {
