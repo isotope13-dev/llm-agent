@@ -26,7 +26,7 @@ GOLANGCI_LINT_BIN := $(LINT_ROOT)/out/linters/golangci-lint-$(GOLANGCI_LINT_VERS
 $(GOLANGCI_LINT_BIN):
 	mkdir -p $(LINT_ROOT)/out/linters
 	rm -rf $(LINT_ROOT)/out/linters/golangci-lint-*
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LINT_ROOT)/out/linters $(GOLANGCI_LINT_VERSION)
+	curl --retry 6 --retry-all-errors --retry-max-time 120 -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LINT_ROOT)/out/linters $(GOLANGCI_LINT_VERSION)
 	mv $(LINT_ROOT)/out/linters/golangci-lint $@
 
 LINTERS += golangci-lint-lint
@@ -43,8 +43,8 @@ YAMLLINT_BIN := $(YAMLLINT_ROOT)/dist/bin/yamllint
 $(YAMLLINT_BIN):
 	mkdir -p $(LINT_ROOT)/out/linters
 	rm -rf $(LINT_ROOT)/out/linters/yamllint-*
-	curl -sSfL https://github.com/adrienverge/yamllint/archive/refs/tags/v$(YAMLLINT_VERSION).tar.gz | tar -C $(LINT_ROOT)/out/linters -zxf -
-	cd $(YAMLLINT_ROOT) && pip3 install --target dist . || pip install --target dist .
+	curl --retry 6 --retry-all-errors --retry-max-time 120 -sSfL https://github.com/adrienverge/yamllint/archive/refs/tags/v$(YAMLLINT_VERSION).tar.gz | tar -C $(LINT_ROOT)/out/linters -zxf -
+	cd $(YAMLLINT_ROOT) && pip3 install --target dist . || pip install --target dist . || uv pip install --target dist .
 
 LINTERS += yamllint-lint
 yamllint-lint: $(YAMLLINT_BIN)

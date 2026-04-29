@@ -19,7 +19,7 @@ import (
 //
 // Both feedPi and the stdout reader (via observePiLine) write to pi's
 // stdin, so writes are serialised through writeMu.
-type piSignals struct {
+type piSignals struct { //nolint:govet // Field order keeps protocol state grouped by responsibility.
 	captured     atomic.Pointer[string]
 	agentEnd     chan struct{}
 	switchAck    chan struct{}
@@ -203,6 +203,7 @@ func observePiLine(line string, sigs *piSignals) {
 				path := ev.Data.SessionFile
 				sigs.captured.Store(&path)
 			}
+		default:
 		}
 	case "extension_ui_request":
 		if _, isDialog := piDialogMethods[ev.Method]; !isDialog {
@@ -215,5 +216,6 @@ func observePiLine(line string, sigs *piSignals) {
 		}); err != nil {
 			sigs.log.Debug("pi extension_ui_response", slog.Any("error", err))
 		}
+	default:
 	}
 }

@@ -567,8 +567,8 @@ func cmdEnvValue(cmd *exec.Cmd, key string) string {
 	}
 	value := ""
 	for _, kv := range env {
-		if strings.HasPrefix(kv, prefix) {
-			value = strings.TrimPrefix(kv, prefix)
+		if v, ok := strings.CutPrefix(kv, prefix); ok {
+			value = v
 		}
 	}
 	return value
@@ -585,7 +585,7 @@ func cmdWorkDir(cmd *exec.Cmd) string {
 	return wd
 }
 
-type probeOutput struct {
+type probeOutput struct { //nolint:govet // Keep synchronisation fields adjacent to the buffer they guard.
 	first chan struct{}
 	once  sync.Once
 	mu    sync.Mutex
@@ -625,12 +625,12 @@ func probeExitStatus(err error) string {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ProcessState != nil {
-		if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 			if status.Signaled() {
 				return "terminated by signal " + status.Signal().String()
 			}
 		}
-		return fmt.Sprintf("exited with code %d", exitErr.ProcessState.ExitCode())
+		return fmt.Sprintf("exited with code %d", exitErr.ExitCode())
 	}
 	return "exited with error: " + err.Error()
 }
