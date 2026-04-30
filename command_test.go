@@ -68,6 +68,29 @@ func TestDefaultCommandIncludeDirs(t *testing.T) {
 	}
 }
 
+func TestBuildCmdAddsTrustedWorkdir(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     string
+	}{
+		{"codex", "--add-dir . -"},
+		{"gemini", "--include-directories ."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			a := &Agent{Provider: tt.provider}
+			cmd, err := a.buildCmd(context.Background(), t.TempDir(), "prompt", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			argv := strings.Join(cmd.Args, " ")
+			if !strings.Contains(argv, tt.want) {
+				t.Fatalf("argv missing trusted workdir args %q: %s", tt.want, argv)
+			}
+		})
+	}
+}
+
 func TestDefaultCommandTmpDir(t *testing.T) {
 	a := &Agent{Provider: "claude", TmpDir: "/scratch/x"}
 	cmd, err := DefaultCommand(context.Background(), a)

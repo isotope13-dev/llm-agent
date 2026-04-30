@@ -43,7 +43,11 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		return cmd, nil
 
 	case "codex":
-		args := []string{"exec", "--json", "--full-auto", "--sandbox", "danger-full-access"}
+		args := []string{
+			"exec", "--json", "--full-auto",
+			"--skip-git-repo-check",
+			"--sandbox", "danger-full-access",
+		}
 		for _, d := range agent.IncludeDirs {
 			args = append(args, "--add-dir", d)
 		}

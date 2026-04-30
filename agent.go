@@ -184,6 +184,7 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 		cmd.Args = append(cmd.Args, extra...)
 	}
 	cmd.Dir = workdir
+	addTrustedWorkdirArg(a.Provider, cmd)
 
 	if Base(a.Provider) == "cursor" {
 		path := filepath.Join(workdir, "PROMPT.md")
@@ -194,6 +195,26 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 		// removing it racing with the subprocess can lose the prompt.
 	}
 	return cmd, nil
+}
+
+func addTrustedWorkdirArg(provider string, cmd *exec.Cmd) {
+	switch Base(provider) {
+	case "codex":
+		insertBeforePromptArg(cmd, "--add-dir", ".")
+	case "gemini":
+		cmd.Args = append(cmd.Args, "--include-directories", ".")
+	}
+}
+
+func insertBeforePromptArg(cmd *exec.Cmd, args ...string) {
+	if len(args) == 0 {
+		return
+	}
+	if len(cmd.Args) > 1 && cmd.Args[len(cmd.Args)-1] == "-" {
+		cmd.Args = append(cmd.Args[:len(cmd.Args)-1], append(args, "-")...)
+		return
+	}
+	cmd.Args = append(cmd.Args, args...)
 }
 
 // cmdPipes is the bundle of stdin/stdout/stderr pipes wired onto a command.
