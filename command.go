@@ -7,12 +7,14 @@ import (
 )
 
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
-// IncludeDirs, Model, TmpDir, and Env. It supports the providers cyclotron
-// uses today: claude, gemini, codex, opencode, pi, cursor.
+// IncludeDirs, Model, TmpDir, Env, and ExtraArgs. It supports the providers
+// cyclotron uses today: claude, gemini, codex, opencode, pi, cursor.
 //
 // The returned command:
 //   - reads its prompt from stdin (cursor reads PROMPT.md, written by Run);
 //   - has TmpDir injected as TMPDIR/TMP/TEMP via Env;
+//   - has any Agent.ExtraArgs appended after the built-in flags (and before
+//     a trailing positional, e.g. codex's `-` or cursor's prompt argument);
 //   - has stdin/stdout/stderr left for the caller to wire pipes onto.
 //
 // To support a new provider, write a custom NewCmd on Agent.
@@ -20,11 +22,13 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 	base, model := Base(agent.Provider), Model(agent.Provider)
 	switch base {
 	case "claude":
-		cmd := exec.CommandContext(ctx, "claude",
+		args := []string{
 			"--verbose",
 			"--output-format", "stream-json",
 			"--dangerously-skip-permissions",
-		)
+		}
+		args = append(args, agent.ExtraArgs...)
+		cmd := exec.CommandContext(ctx, "claude", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil
 
@@ -36,6 +40,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		for _, d := range agent.IncludeDirs {
 			args = append(args, "--include-directories", d)
 		}
+		args = append(args, agent.ExtraArgs...)
 		cmd := exec.CommandContext(ctx, "gemini", args...)
 		// Gemini sandboxes by default; disable so the agent can write to
 		// directories outside its working tree.
@@ -51,6 +56,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		for _, d := range agent.IncludeDirs {
 			args = append(args, "--add-dir", d)
 		}
+		args = append(args, agent.ExtraArgs...)
 		args = append(args, "-")
 		cmd := exec.CommandContext(ctx, "codex", args...)
 		cmd.Env = agent.processEnv()
@@ -61,6 +67,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		if model != "" {
 			args = append(args, "--model", model)
 		}
+		args = append(args, agent.ExtraArgs...)
 		cmd := exec.CommandContext(ctx, "opencode", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil
@@ -74,6 +81,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		if model != "" {
 			args = append(args, "--model", model)
 		}
+		args = append(args, agent.ExtraArgs...)
 		cmd := exec.CommandContext(ctx, "pi", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil
@@ -90,8 +98,9 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 			"--output-format", "stream-json",
 			"--stream-partial-output",
 			"--model", m,
-			"Follow the instructions in PROMPT.md exactly",
 		}
+		args = append(args, agent.ExtraArgs...)
+		args = append(args, "Follow the instructions in PROMPT.md exactly")
 		cmd := exec.CommandContext(ctx, "agent", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil

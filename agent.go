@@ -64,6 +64,12 @@ type Agent struct {
 	// Each entry must be "KEY=VALUE".
 	Env []string
 
+	// ExtraArgs is appended to the provider command line after the built-in
+	// flags but before any prompt placeholder. Use this for provider-specific
+	// flags the caller wants to set without overriding NewCmd, e.g.
+	// pi's `--thinking off`, `--no-tools`, `--no-skills`.
+	ExtraArgs []string
+
 	// Timeout is the wall-clock limit for one Run. Zero means no limit.
 	Timeout time.Duration
 
@@ -74,6 +80,15 @@ type Agent struct {
 	// ProbeTimeout overrides the first-byte timeout used by Probe.
 	// Zero picks 75s for cloud providers and 5 min for local ones.
 	ProbeTimeout time.Duration
+
+	// MaxStdoutBytes caps the captured Result.Output. Zero uses the default
+	// (8 MB). A positive value uses exactly that many bytes; a negative value
+	// disables the cap (use carefully — a runaway stream can OOM the host).
+	//
+	// Lines beyond the cap are silently dropped from the captured Output but
+	// are still observed by OnEvent and the provider's protocol filter (so
+	// pi RPC events still drive feedPi correctly).
+	MaxStdoutBytes int
 
 	probeOnce sync.Once
 }
@@ -87,6 +102,12 @@ type RunOptions struct {
 	// OnStderr is called once per stderr line that is not provider-startup
 	// noise (see IsStderrNoise).
 	OnStderr func(line string)
+
+	// Logger overrides Agent.Logger for this single Run, so per-call context
+	// (e.g. a sample's sha256) attaches to llmagent's lifecycle records
+	// (`llmagent invoke`, `llmagent probe ok`, idle/exit warnings). Falls back
+	// to Agent.Logger, then slog.Default. Optional.
+	Logger *slog.Logger
 
 	// SessionID, if non-empty, asks the provider to resume that session.
 	// Providers that don't support resumption (codex, gemini) ignore
@@ -117,6 +138,10 @@ func (a *Agent) Run(ctx context.Context, prompt, workdir string, opts RunOptions
 		return nil, err
 	}
 
+	// Per-call logger (e.g. with a sha256 attr) overrides the agent's; falls
+	// back to Agent.Logger via runLogger.
+	rlog := a.runLogger(opts.Logger)
+
 	start := time.Now()
 	cmd, err := a.buildCmd(ctx, workdir, prompt, opts.SessionID)
 	if err != nil {
@@ -130,7 +155,7 @@ func (a *Agent) Run(ctx context.Context, prompt, workdir string, opts RunOptions
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", a.Provider, err)
 	}
-	a.logger().Info("llmagent invoke",
+	rlog.Info("llmagent invoke",
 		slog.String("provider", a.Provider),
 		slog.Int("pid", cmd.Process.Pid),
 		slog.Int("prompt_bytes", len(prompt)),
@@ -141,13 +166,15 @@ func (a *Agent) Run(ctx context.Context, prompt, workdir string, opts RunOptions
 	stream := &streamState{lastActive: time.Now()}
 
 	var sigs *piSignals
+	var capture func(string) bool
 	if Base(a.Provider) == "pi" {
 		sigs = newPiSignals(pipes.stdin, a.logger())
+		capture = piCaptureFilter
 		go a.feedPi(ctx, pipes.stdin, prompt, opts.SessionID, sigs)
 	} else {
 		go a.feedStdin(pipes.stdin, prompt)
 	}
-	stdoutDone := streamStdout(stream, pipes.stdout, opts.OnEvent, sigs)
+	stdoutDone := streamStdout(stream, pipes.stdout, opts.OnEvent, sigs, capture, a.MaxStdoutBytes)
 
 	timeoutCtx, cancel := a.withTimeout(ctx)
 	defer cancel()
@@ -299,16 +326,30 @@ type streamState struct {
 // When sigs is non-nil, the reader also drives the pi RPC protocol: it
 // flags agent_end events so the feeder can advance, and captures the
 // sessionFile path from get_state responses for later resumption.
-func streamStdout(stream *streamState, stdout io.Reader, onEvent func(string), sigs *piSignals) <-chan struct{} {
+//
+// captureFilter, when non-nil, decides per line whether to keep it in the
+// captured Output. Returning false drops the line from Output (it is still
+// observed by sigs/onEvent so protocol semantics aren't affected). pi's
+// filter drops thinking_delta events, which are O(n^2) in the prompt's
+// thinking length and otherwise blow the cap before any text is emitted.
+func streamStdout(
+	stream *streamState, stdout io.Reader,
+	onEvent func(string), sigs *piSignals,
+	captureFilter func(string) bool, capBytes int,
+) <-chan struct{} {
 	doneCh := make(chan struct{})
+	if capBytes == 0 {
+		capBytes = maxStdoutBytes
+	}
 	go func() {
 		defer close(doneCh)
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 		for sc.Scan() {
 			line := sc.Text()
+			keep := captureFilter == nil || captureFilter(line)
 			stream.mu.Lock()
-			if stream.output.Len() < maxStdoutBytes {
+			if keep && (capBytes < 0 || stream.output.Len() < capBytes) {
 				stream.output.WriteString(line)
 				stream.output.WriteByte('\n')
 			}
@@ -544,6 +585,16 @@ func (a *Agent) logger() *slog.Logger {
 		return a.Logger
 	}
 	return slog.Default()
+}
+
+// runLogger picks the per-call logger if RunOptions.Logger is set, otherwise
+// falls back to the agent's logger. Lets callers attach per-invocation
+// context (sha256, worker id) to llmagent's lifecycle records.
+func (a *Agent) runLogger(perCall *slog.Logger) *slog.Logger {
+	if perCall != nil {
+		return perCall
+	}
+	return a.logger()
 }
 
 func (a *Agent) withTimeout(parent context.Context) (context.Context, context.CancelFunc) {

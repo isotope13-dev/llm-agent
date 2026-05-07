@@ -160,11 +160,14 @@ func (a *Agent) feedPi(ctx context.Context, stdin io.Closer, prompt, sessionID s
 // command was acknowledged), the request ID for extension UI dialogs, and
 // the sessionFile from a get_state response. Other fields are ignored.
 type piEventFields struct {
-	Type    string `json:"type"`
-	ID      string `json:"id"`
-	Command string `json:"command"`
-	Method  string `json:"method"`
-	Data    struct {
+	Type                  string `json:"type"`
+	ID                    string `json:"id"`
+	Command               string `json:"command"`
+	Method                string `json:"method"`
+	AssistantMessageEvent struct {
+		Type string `json:"type"`
+	} `json:"assistantMessageEvent"`
+	Data struct {
 		SessionFile string `json:"sessionFile"`
 	} `json:"data"`
 }
@@ -218,4 +221,47 @@ func observePiLine(line string, sigs *piSignals) {
 		}
 	default:
 	}
+}
+
+// piCaptureFilter decides whether to keep one stdout line in the captured
+// Result.Output. It drops noise that grows superlinearly with the assistant's
+// reasoning length and would otherwise blow the MaxStdoutBytes cap before any
+// useful text is emitted.
+//
+// Specifically, pi's message_update events carry the cumulative `partial`
+// message, so each thinking_delta event embeds the full thinking-so-far. With
+// long thinking runs that's quadratic in size. We drop:
+//   - message_update events whose assistantMessageEvent.type is thinking_delta
+//   - tool_execution_update events (similarly cumulative; tool_execution_start
+//     and tool_execution_end carry the useful information).
+//
+// All other lines (text_delta, text_end, message_start/end, agent_start/end,
+// turn_*, response, tool_execution_start/end, extension_ui_*) are kept so the
+// caller can parse the assistant's textual reply downstream.
+func piCaptureFilter(line string) bool {
+	if len(line) < 12 || line[0] != '{' {
+		return true
+	}
+	var ev piEventFields
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		// If it's not parseable as JSON, keep it — likely a bare line of
+		// noise or a partial event. Better to capture than to silently drop.
+		return true
+	}
+	switch ev.Type {
+	case "message_update":
+		switch ev.AssistantMessageEvent.Type {
+		case "thinking_delta", "thinking_start", "thinking_end":
+			return false
+		case "text_delta":
+			// text_delta also carries cumulative `partial`; the equivalent
+			// non-quadratic representation is the trailing text_end event,
+			// which carries the full content. Drop deltas to keep Output
+			// bounded; the consumer reads text_end.
+			return false
+		}
+	case "tool_execution_update":
+		return false
+	}
+	return true
 }
