@@ -66,8 +66,9 @@ type Agent struct {
 
 	// ExtraArgs is appended to the provider command line after the built-in
 	// flags but before any prompt placeholder. Use this for provider-specific
-	// flags the caller wants to set without overriding NewCmd, e.g.
-	// pi's `--thinking off`, `--no-tools`, `--no-skills`.
+	// flags the caller wants to set without overriding NewCmd. Defaults stay
+	// provider-native; for example, pi thinking/tools/skills are left enabled
+	// unless the caller explicitly disables them here.
 	ExtraArgs []string
 
 	// Timeout is the wall-clock limit for one Run. Zero means no limit.

@@ -21,8 +21,8 @@ func TestDefaultCommand(t *testing.T) {
 		{"opencode:kimi-k2", "opencode", []string{"--model", "kimi-k2"}, nil},
 		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},
 		{"cursor:sonnet-4", "agent", []string{"--model", "sonnet-4"}, nil},
-		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session"}},
-		{"pi:anthropic/claude-sonnet-4-20250514", "pi", []string{"--mode", "rpc", "--model", "anthropic/claude-sonnet-4-20250514"}, []string{"--no-session"}},
+		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session", "--thinking", "--no-tools", "--no-skills"}},
+		{"pi:anthropic/claude-sonnet-4-20250514", "pi", []string{"--mode", "rpc", "--model", "anthropic/claude-sonnet-4-20250514"}, []string{"--no-session", "--thinking", "--no-tools", "--no-skills"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {

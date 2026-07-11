@@ -35,6 +35,11 @@ type Runner struct {
 	// (opencode, pi). Zero means 15 min.
 	LocalCooldown time.Duration
 
+	// TransientBackoff overrides the base delay before a same-provider retry
+	// on a transient (capacity/overload) error. Zero means defaultTransientBackoff.
+	// A negative value disables the wait entirely (used by tests).
+	TransientBackoff time.Duration
+
 	mu sync.Mutex
 }
 
@@ -66,8 +71,7 @@ func (r *Runner) Run(ctx context.Context, prompt, workdir string, opts RunOption
 		if callOpts.SessionID == "" {
 			callOpts.SessionID = r.session(ag.Provider)
 		}
-		r.logger().Info("llmagent runner trying", slog.String("provider", ag.Provider))
-		res, err := ag.Run(ctx, prompt, workdir, callOpts)
+		res, err := r.runWithRetry(ctx, ag, prompt, workdir, callOpts)
 		if err == nil {
 			r.setSession(ag.Provider, res.SessionID)
 			if r.Cooldowns != nil {
@@ -87,6 +91,54 @@ func (r *Runner) Run(ctx context.Context, prompt, workdir string, opts RunOption
 		r.maybeCooldown(ag.Provider, err)
 	}
 	return nil, fmt.Errorf("all providers failed, last error: %w", lastErr)
+}
+
+// runWithRetry invokes one agent, retrying it in place on a transient
+// capacity/overload error (which typically clears within seconds) before the
+// caller fails over to the next provider. Quota and hard errors are returned
+// immediately so the normal failover + cooldown path handles them — a genuine
+// quota reset or a missing binary will not recover in a few seconds.
+func (r *Runner) runWithRetry(ctx context.Context, ag *Agent, prompt, workdir string, opts RunOptions) (*Result, error) {
+	for attempt := 0; ; attempt++ {
+		if attempt == 0 {
+			r.logger().Info("llmagent runner trying", slog.String("provider", ag.Provider))
+		}
+		res, err := ag.Run(ctx, prompt, workdir, opts)
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if attempt >= defaultTransientRetries || !DetectTransient(err.Error()) {
+			return nil, err
+		}
+		backoff := (r.transientBackoff()) << attempt
+		r.logger().Warn("llmagent transient provider error; retrying same provider",
+			slog.String("provider", ag.Provider),
+			slog.Int("attempt", attempt+1),
+			slog.Duration("backoff", backoff),
+			slog.String("error", truncate(err.Error(), 120)))
+		if backoff > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+}
+
+// transientBackoff returns the base same-provider retry delay: the configured
+// override, or the default. A negative override means "no wait" (tests).
+func (r *Runner) transientBackoff() time.Duration {
+	if r.TransientBackoff < 0 {
+		return 0
+	}
+	if r.TransientBackoff == 0 {
+		return defaultTransientBackoff
+	}
+	return r.TransientBackoff
 }
 
 // waitForAvailable returns the slice of agents to try. If every agent is
@@ -150,6 +202,12 @@ func (r *Runner) maybeCooldown(provider string, err error) {
 			reason = "quota: " + detail
 		}
 		r.setCooldown(provider, d, reason)
+		return
+	}
+	if DetectTransient(err.Error()) {
+		// Survived its in-invoke retries but still overloaded: bench it briefly
+		// (not the full blacklist) so the next batch can pick it right back up.
+		r.setCooldown(provider, CapacityCooldown, "capacity: "+truncate(err.Error(), 80))
 		return
 	}
 	d := BlacklistCooldown
