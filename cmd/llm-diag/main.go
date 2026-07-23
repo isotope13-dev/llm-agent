@@ -12,7 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	llmagent "codeberg.org/atomdrift/llm-agent"
+	llmagent "github.com/atomdrift-project/llm-agent"
 )
 
 type localProvider struct {
