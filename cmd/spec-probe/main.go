@@ -1,31 +1,44 @@
 // Command spec-probe verifies that "<provider>[:<model>][@<effort>]" specs are
-// actually accepted by the provider CLIs. A bad model name parses fine and only
-// fails at invocation, so the chains in cyclotron's config are unverifiable by
-// inspection — this exercises each one for real.
+// actually usable — the credentials work AND the model name resolves.
 //
-// Probe starts the CLI, waits for its first stdout byte, and kills it, so the
-// cost is a process start rather than a completion.
+// It runs a real, bounded invocation rather than Agent.Probe. Probe waits for
+// the CLI's first stdout byte and kills it, which is enough to prove the binary
+// exists and nothing more: every provider emits session or init JSON before it
+// authenticates or validates a model. In practice that made Probe report
+// success for a nonexistent codex model, and — more expensively — it logged
+// "llmagent probe ok" for claude immediately before every invocation failed with
+// authentication_failed, so an expired login looked healthy while the premium
+// tier silently degraded to its fallback for hours.
+//
+// A one-word completion costs a few cents and answers the question Probe cannot.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	llmagent "github.com/isotope13-dev/llm-agent"
 )
 
+// probePrompt is deliberately trivial: the goal is a completed round trip, not
+// a useful answer. Asking for one token keeps the cost near the floor.
+const probePrompt = "Reply with exactly one word: ok"
+
 func main() {
-	timeout := flag.Duration("timeout", 90*time.Second, "per-spec probe timeout")
-	verbose := flag.Bool("v", false, "log probe argv")
+	timeout := flag.Duration("timeout", 3*time.Minute, "per-spec timeout")
+	verbose := flag.Bool("v", false, "log probe argv and provider events")
 	flag.Parse()
 
 	specs := flag.Args()
 	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: spec-probe [-timeout d] <provider[:model][@effort]>...")
+		fmt.Fprintln(os.Stderr, "runs a real one-word completion per spec; verifies auth AND model name")
 		os.Exit(2)
 	}
 
@@ -35,24 +48,59 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	worst := 0
-	for _, spec := range specs {
-		a := &llmagent.Agent{Provider: spec, Logger: logger, ProbeTimeout: *timeout}
-		start := time.Now()
-		err := a.Probe(context.Background())
-		el := time.Since(start).Round(time.Millisecond)
-		switch {
-		case err == nil:
-			fmt.Printf("OK    %-34s base=%-7s model=%-18s effort=%-6s (%s)\n",
-				spec, llmagent.Base(spec), llmagent.Model(spec), llmagent.Effort(spec), el)
-		default:
-			worst = 1
-			msg := err.Error()
-			if len(msg) > 150 {
-				msg = msg[:150] + "…"
-			}
-			fmt.Printf("FAIL  %-34s %s (%s)\n", spec, msg, el)
-		}
+	workdir, err := os.MkdirTemp("", "spec-probe-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tempdir:", err)
+		os.Exit(1)
 	}
-	os.Exit(worst)
+	defer os.RemoveAll(workdir) //nolint:errcheck // best-effort cleanup
+
+	failed := false
+	for _, spec := range specs {
+		ok, detail, elapsed := runSpec(spec, workdir, *timeout, logger)
+		if ok {
+			fmt.Printf("OK    %-36s base=%-7s model=%-22s effort=%-6s (%s)\n",
+				spec, llmagent.Base(spec), llmagent.Model(spec), llmagent.Effort(spec), elapsed)
+			continue
+		}
+		failed = true
+		fmt.Printf("FAIL  %-36s %s (%s)\n", spec, detail, elapsed)
+	}
+	if failed {
+		os.Exit(1)
+	}
+}
+
+func runSpec(spec, workdir string, timeout time.Duration, logger *slog.Logger) (bool, string, time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	a := &llmagent.Agent{Provider: spec, Logger: logger}
+	start := time.Now()
+	res, err := a.Run(ctx, probePrompt, workdir, llmagent.RunOptions{Logger: logger})
+	elapsed := time.Since(start).Round(time.Millisecond)
+
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return false, fmt.Sprintf("timed out after %s", timeout), elapsed
+	case err != nil:
+		return false, firstLine(err.Error()), elapsed
+	case res == nil || strings.TrimSpace(res.Output) == "":
+		// A clean exit with no output is not success: the CLI can report a bad
+		// model or a dead credential on stderr and still exit 0.
+		return false, "completed with empty output (check credentials and model name)", elapsed
+	}
+	return true, "", elapsed
+}
+
+// firstLine trims a provider's error to something readable; the CLIs emit
+// multi-kilobyte JSON blobs on failure.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
