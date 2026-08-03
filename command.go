@@ -19,13 +19,20 @@ import (
 //
 // To support a new provider, write a custom NewCmd on Agent.
 func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
-	base, model := Base(agent.Provider), Model(agent.Provider)
+	base, model, effort := Base(agent.Provider), Model(agent.Provider), Effort(agent.Provider)
 	switch base {
 	case "claude":
 		args := []string{
 			"--verbose",
 			"--output-format", "stream-json",
 			"--dangerously-skip-permissions",
+		}
+		// Accepts an alias ("opus", "sonnet", "fable") or a full model name.
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		if effort != "" {
+			args = append(args, "--effort", effort)
 		}
 		args = append(args, agent.ExtraArgs...)
 		cmd := exec.CommandContext(ctx, "claude", args...)
@@ -55,6 +62,15 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		}
 		for _, d := range agent.IncludeDirs {
 			args = append(args, "--add-dir", d)
+		}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		// codex exposes no --effort flag; reasoning effort is a config key, the
+		// same one ~/.codex/config.toml sets globally. Passing it with -c
+		// overrides that per invocation.
+		if effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+effort)
 		}
 		args = append(args, agent.ExtraArgs...)
 		args = append(args, "-")

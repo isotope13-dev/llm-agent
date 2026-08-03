@@ -31,3 +31,30 @@ func TestBaseAndModel(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderSpecParsing covers "<base>[:<model>][@<effort>]". Effort is
+// stripped before the model split, so a spec carrying effort but no model still
+// yields a usable base — the case that would otherwise produce a provider name
+// of "claude@high" and fail the DefaultCommand switch with "unknown provider".
+func TestProviderSpecParsing(t *testing.T) {
+	for _, tc := range []struct{ spec, base, model, effort string }{
+		{"claude", "claude", "", ""},
+		{"claude:opus", "claude", "opus", ""},
+		{"claude:opus@high", "claude", "opus", "high"},
+		{"claude@max", "claude", "", "max"},
+		{"codex:gpt-5.6-luna", "codex", "gpt-5.6-luna", ""},
+		{"codex:gpt-5.6-sol@high", "codex", "gpt-5.6-sol", "high"},
+		{"cursor", "cursor", "", ""},
+		{"", "", "", ""},
+	} {
+		if got := Base(tc.spec); got != tc.base {
+			t.Errorf("Base(%q) = %q, want %q", tc.spec, got, tc.base)
+		}
+		if got := Model(tc.spec); got != tc.model {
+			t.Errorf("Model(%q) = %q, want %q", tc.spec, got, tc.model)
+		}
+		if got := Effort(tc.spec); got != tc.effort {
+			t.Errorf("Effort(%q) = %q, want %q", tc.spec, got, tc.effort)
+		}
+	}
+}
