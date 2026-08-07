@@ -16,7 +16,10 @@ func TestDefaultCommand(t *testing.T) {
 		{"claude", "claude", []string{"--verbose", "--output-format", "stream-json"}, nil},
 		{"gemini", "gemini", []string{"--yolo", "--output-format", "stream-json"}, []string{"--model"}},
 		{"gemini:gemini-2.5-pro", "gemini", []string{"--model", "gemini-2.5-pro"}, nil},
-		{"codex", "codex", []string{"exec", "--json", "--full-auto"}, nil},
+		// --full-auto and --sandbox are mutually exclusive in codex >=0.130 and
+		// together leave the sandbox on; bwrap then fails under a unit with
+		// RestrictNamespaces=true. Neither may come back.
+		{"codex", "codex", []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}, []string{"--full-auto", "--sandbox"}},
 		{"opencode", "opencode", []string{"run", "--format", "json"}, []string{"--model"}},
 		{"opencode:kimi-k2", "opencode", []string{"--model", "kimi-k2"}, nil},
 		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},

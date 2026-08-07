@@ -55,10 +55,22 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		return cmd, nil
 
 	case "codex":
+		// --full-auto and --sandbox are mutually exclusive in codex >=0.130:
+		// --full-auto is a deprecated alias for --sandbox workspace-write, so
+		// passing both leaves codex enforcing a sandbox the caller asked it to
+		// drop. On Linux that sandbox wraps every shell call in bwrap, which
+		// cannot create a user namespace under a systemd unit with
+		// RestrictNamespaces=true -- the agent then reports
+		// "bwrap: No permissions to create a new namespace" and returns having
+		// changed nothing. On macOS it refuses shell writes to --add-dir paths
+		// with EPERM. --dangerously-bypass-approvals-and-sandbox expresses the
+		// intent in one flag. Callers that want codex sandboxed should say so
+		// through a custom Agent.NewCmd; the isolation that matters for a
+		// service belongs to its unit, not to the agent it spawns.
 		args := []string{
-			"exec", "--json", "--full-auto",
+			"exec", "--json",
 			"--skip-git-repo-check",
-			"--sandbox", "danger-full-access",
+			"--dangerously-bypass-approvals-and-sandbox",
 		}
 		for _, d := range agent.IncludeDirs {
 			args = append(args, "--add-dir", d)
