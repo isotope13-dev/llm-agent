@@ -8,7 +8,7 @@ import "strings"
 // of "claude@high".
 
 // Base returns the provider name without any model or effort suffix.
-// "gemini:gemini-2.5-pro@high" → "gemini"; "claude@max" → "claude".
+// "agy:gemini-3.1-pro@high" → "agy"; "claude@max" → "claude".
 func Base(provider string) string {
 	spec, _, _ := strings.Cut(provider, "@")
 	if base, _, ok := strings.Cut(spec, ":"); ok {
@@ -18,7 +18,7 @@ func Base(provider string) string {
 }
 
 // Model returns the model suffix, or "" if none.
-// "gemini:gemini-2.5-pro@high" → "gemini-2.5-pro"; "claude@max" → "".
+// "agy:gemini-3.1-pro@high" → "gemini-3.1-pro"; "claude@max" → "".
 func Model(provider string) string {
 	spec, _, _ := strings.Cut(provider, "@")
 	if _, model, ok := strings.Cut(spec, ":"); ok {
@@ -31,9 +31,9 @@ func Model(provider string) string {
 // "claude:opus@high" → "high"; "codex:gpt-5.6-sol" → "".
 //
 // Not validated here: the accepted set differs per provider (claude takes
-// low/medium/high/xhigh/max; codex carries it as the model_reasoning_effort
-// config key) and an unknown value is the provider CLI's error to report, not
-// something to silently drop.
+// low/medium/high/xhigh/max; agy low/medium/high; codex carries it as the
+// model_reasoning_effort config key) and an unknown value is the provider
+// CLI's error to report, not something to silently drop.
 func Effort(provider string) string {
 	if _, effort, ok := strings.Cut(provider, "@"); ok {
 		return effort

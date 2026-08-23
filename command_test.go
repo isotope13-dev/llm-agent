@@ -14,8 +14,11 @@ func TestDefaultCommand(t *testing.T) {
 		wantNotArgv []string
 	}{
 		{"claude", "claude", []string{"--verbose", "--output-format", "stream-json"}, nil},
-		{"gemini", "gemini", []string{"--yolo", "--output-format", "stream-json"}, []string{"--model"}},
-		{"gemini:gemini-2.5-pro", "gemini", []string{"--model", "gemini-2.5-pro"}, nil},
+		{"agy", "agy", []string{"--output-format", "stream-json", "--input-format", "stream-json", "--dangerously-skip-permissions"}, []string{"--model", "--effort"}},
+		{"agy:gemini-3.1-pro@high", "agy", []string{"--model", "gemini-3.1-pro", "--effort", "high"}, nil},
+		// "gemini" is a legacy alias for the same CLI; the standalone gemini
+		// binary is no longer invoked.
+		{"gemini", "agy", []string{"--input-format", "stream-json"}, []string{"--yolo", "--include-directories"}},
 		// --full-auto and --sandbox are mutually exclusive in codex >=0.130 and
 		// together leave the sandbox on; bwrap then fails under a unit with
 		// RestrictNamespaces=true. Neither may come back.
@@ -60,14 +63,14 @@ func TestDefaultCommandUnknown(t *testing.T) {
 }
 
 func TestDefaultCommandIncludeDirs(t *testing.T) {
-	a := &Agent{Provider: "gemini", IncludeDirs: []string{"/a", "/b"}}
+	a := &Agent{Provider: "agy", IncludeDirs: []string{"/a", "/b"}}
 	cmd, err := DefaultCommand(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	argv := strings.Join(cmd.Args, " ")
-	if !strings.Contains(argv, "--include-directories /a") || !strings.Contains(argv, "--include-directories /b") {
-		t.Errorf("gemini argv missing include dirs: %s", argv)
+	if !strings.Contains(argv, "--add-dir /a") || !strings.Contains(argv, "--add-dir /b") {
+		t.Errorf("agy argv missing include dirs: %s", argv)
 	}
 }
 
@@ -77,7 +80,8 @@ func TestBuildCmdAddsTrustedWorkdir(t *testing.T) {
 		want     string
 	}{
 		{"codex", "--add-dir . -"},
-		{"gemini", "--include-directories ."},
+		{"agy", "--add-dir ."},
+		{"gemini", "--add-dir ."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
@@ -119,7 +123,8 @@ func TestResumeArgs(t *testing.T) {
 		{"claude", "abc", []string{"-r", "abc"}},
 		{"opencode:kimi-k2", "abc", []string{"-s", "abc"}},
 		{"cursor", "abc", []string{"--resume", "abc"}},
-		{"gemini", "abc", nil},
+		{"agy", "abc", []string{"--conversation", "abc"}},
+		{"gemini:gemini-3.1-pro", "abc", []string{"--conversation", "abc"}},
 		{"codex", "abc", nil},
 		{"claude", "", nil},
 	}

@@ -49,7 +49,7 @@ type Agent struct {
 	probeErr error
 
 	// Provider is the agent name, optionally with a model suffix:
-	// "claude", "gemini:gemini-2.5-pro", "opencode:kimi-k2".
+	// "claude", "agy:gemini-3.1-pro", "opencode:kimi-k2".
 	Provider string
 
 	// TmpDir, when non-empty, is exported as TMPDIR/TMP/TEMP to the
@@ -57,7 +57,7 @@ type Agent struct {
 	TmpDir string
 
 	// IncludeDirs are directories the agent is allowed to read or write.
-	// Used by providers that take a directory allow-list (gemini, codex).
+	// Used by providers that take a directory allow-list (agy, codex).
 	IncludeDirs []string
 
 	// Env is appended to the subprocess environment after TMPDIR overrides.
@@ -111,8 +111,7 @@ type RunOptions struct {
 	Logger *slog.Logger
 
 	// SessionID, if non-empty, asks the provider to resume that session.
-	// Providers that don't support resumption (codex, gemini) ignore
-	// this field.
+	// Providers that don't support resumption (codex) ignore this field.
 	SessionID string
 }
 
@@ -226,11 +225,12 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 }
 
 func addTrustedWorkdirArg(provider string, cmd *exec.Cmd) {
-	switch Base(provider) {
-	case "codex":
+	if usesAgy(provider) {
+		cmd.Args = append(cmd.Args, "--add-dir", ".")
+		return
+	}
+	if Base(provider) == "codex" {
 		insertBeforePromptArg(cmd, "--add-dir", ".")
-	case "gemini":
-		cmd.Args = append(cmd.Args, "--include-directories", ".")
 	}
 }
 
@@ -269,14 +269,18 @@ func makePipes(cmd *exec.Cmd) (cmdPipes, error) {
 	return cmdPipes{stdin: stdin, stdout: stdout, stderr: stderr}, nil
 }
 
-// feedStdin is the default transport: write the prompt verbatim, close stdin.
-// Pi uses feedPi (in pi.go) which speaks JSON-RPC instead.
+// feedStdin is the default transport: write the prompt, close stdin. agy
+// frames it as one stream-json message; every other provider takes it
+// verbatim. Pi uses feedPi (in pi.go), which speaks JSON-RPC instead.
 func (a *Agent) feedStdin(stdin io.WriteCloser, prompt string) {
 	defer func() {
 		if err := stdin.Close(); err != nil {
 			a.logger().Debug("close stdin", slog.Any("error", err))
 		}
 	}()
+	if usesAgy(a.Provider) {
+		prompt = agyStreamInput(prompt)
+	}
 	if _, err := io.WriteString(stdin, prompt); err != nil {
 		a.logger().Debug("write prompt to stdin",
 			slog.String("provider", a.Provider),
@@ -605,10 +609,10 @@ func (a *Agent) withTimeout(parent context.Context) (context.Context, context.Ca
 	return context.WithTimeout(parent, a.Timeout)
 }
 
-// processEnv returns os.Environ() with TMPDIR overrides and any additional
-// extra entries appended. Duplicate keys are intentional: on Linux and macOS
-// the last assignment wins.
-func (a *Agent) processEnv(extra ...string) []string {
+// processEnv returns os.Environ() with TMPDIR overrides and Agent.Env
+// appended. Duplicate keys are intentional: on Linux and macOS the last
+// assignment wins.
+func (a *Agent) processEnv() []string {
 	env := os.Environ()
 	if a.TmpDir != "" {
 		env = append(env,
@@ -617,8 +621,7 @@ func (a *Agent) processEnv(extra ...string) []string {
 			"TEMP="+a.TmpDir,
 		)
 	}
-	env = append(env, a.Env...)
-	return append(env, extra...)
+	return append(env, a.Env...)
 }
 
 func describeCmd(cmd *exec.Cmd) string {
@@ -736,19 +739,23 @@ func killAndReap(cmd *exec.Cmd) {
 	_ = cmd.Wait() //nolint:errcheck // reap zombie, error expected after Kill
 }
 
-// extractSessionID parses one stream-json line and returns its sessionID
-// or session_id, whichever is present. All providers cyclotron supports
-// emit one of these on session-bearing events.
+// extractSessionID parses one stream-json line and returns its sessionID,
+// session_id, or conversation_id (agy), whichever is present. All providers
+// cyclotron supports emit one of these on session-bearing events.
 func extractSessionID(line string) string {
 	var ev struct {
-		SessionID string `json:"sessionID"`
-		SID       string `json:"session_id"`
+		SessionID      string `json:"sessionID"`
+		SID            string `json:"session_id"`
+		ConversationID string `json:"conversation_id"`
 	}
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		return ""
 	}
-	if ev.SessionID != "" {
+	switch {
+	case ev.SessionID != "":
 		return ev.SessionID
+	case ev.SID != "":
+		return ev.SID
 	}
-	return ev.SID
+	return ev.ConversationID
 }

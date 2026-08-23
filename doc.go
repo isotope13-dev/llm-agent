@@ -1,4 +1,4 @@
-// Package llmagent invokes coding-agent CLIs (claude, gemini, codex,
+// Package llmagent invokes coding-agent CLIs (claude, agy, codex,
 // opencode, pi, cursor) as subprocesses, streams their stream-json
 // output, and recovers from quota and rate-limit failures.
 //

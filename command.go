@@ -8,10 +8,12 @@ import (
 
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
 // IncludeDirs, Model, TmpDir, Env, and ExtraArgs. It supports the providers
-// cyclotron uses today: claude, gemini, codex, opencode, pi, cursor.
+// cyclotron uses today: claude, agy (alias: gemini), codex, opencode, pi,
+// cursor.
 //
 // The returned command:
-//   - reads its prompt from stdin (cursor reads PROMPT.md, written by Run);
+//   - reads its prompt from stdin (agy as one stream-json message; cursor
+//     reads PROMPT.md, written by Run);
 //   - has TmpDir injected as TMPDIR/TMP/TEMP via Env;
 //   - has any Agent.ExtraArgs appended after the built-in flags (and before
 //     a trailing positional, e.g. codex's `-` or cursor's prompt argument);
@@ -39,19 +41,31 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		cmd.Env = agent.processEnv()
 		return cmd, nil
 
-	case "gemini":
-		args := []string{"--yolo", "--output-format", "stream-json"}
+	case "agy", "gemini":
+		// --input-format stream-json implies print mode and takes the prompt
+		// from stdin; see agy.go for why the prompt does not go in argv.
+		args := []string{
+			"--output-format", "stream-json",
+			"--input-format", "stream-json",
+			"--dangerously-skip-permissions",
+		}
+		// Model names carry their own effort tier ("gemini-3.1-pro-high"), but
+		// the base name plus --effort resolves too; agy exits non-zero and
+		// lists the alternatives when neither does.
 		if model != "" {
 			args = append(args, "--model", model)
 		}
+		if effort != "" {
+			args = append(args, "--effort", effort)
+		}
 		for _, d := range agent.IncludeDirs {
-			args = append(args, "--include-directories", d)
+			args = append(args, "--add-dir", d)
 		}
 		args = append(args, agent.ExtraArgs...)
-		cmd := exec.CommandContext(ctx, "gemini", args...)
-		// Gemini sandboxes by default; disable so the agent can write to
-		// directories outside its working tree.
-		cmd.Env = agent.processEnv("GEMINI_SANDBOX=false")
+		cmd := exec.CommandContext(ctx, "agy", args...)
+		// agy runs unsandboxed unless asked (--sandbox), so unlike the gemini
+		// CLI it needs no environment override to write outside its worktree.
+		cmd.Env = agent.processEnv()
 		return cmd, nil
 
 	case "codex":
@@ -137,15 +151,16 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 }
 
 // resumeArgs returns CLI flags to resume sessionID for an existing provider,
-// or nil if the provider does not support explicit session IDs.
-//
-// Notes:
-//   - gemini uses session indexes (not IDs) that collide across sibling
-//     workers sharing a workdir, so it is intentionally excluded;
-//   - codex emits no resumable session ID.
+// or nil if the provider does not support explicit session IDs. codex is
+// excluded because it emits no resumable session ID.
 func resumeArgs(provider, sessionID string) []string {
 	if sessionID == "" {
 		return nil
+	}
+	if usesAgy(provider) {
+		// agy conversation IDs are UUIDs, unlike the old gemini CLI's session
+		// indexes, which collided across workers sharing a workdir.
+		return []string{"--conversation", sessionID}
 	}
 	switch Base(provider) {
 	case "claude":
