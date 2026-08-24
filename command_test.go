@@ -23,8 +23,9 @@ func TestDefaultCommand(t *testing.T) {
 		// together leave the sandbox on; bwrap then fails under a unit with
 		// RestrictNamespaces=true. Neither may come back.
 		{"codex", "codex", []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}, []string{"--full-auto", "--sandbox"}},
-		{"opencode", "opencode", []string{"run", "--format", "json"}, []string{"--model"}},
-		{"opencode:kimi-k2", "opencode", []string{"--model", "kimi-k2"}, nil},
+		{"opencode", "opencode", []string{"run", "--format", "json", "--auto"}, []string{"--model", "--variant"}},
+		{"opencode:opencode/deepseek-v4-flash", "opencode", []string{"--model", "opencode/deepseek-v4-flash"}, nil},
+		{"opencode:opencode/deepseek-v4-pro@high", "opencode", []string{"--model", "opencode/deepseek-v4-pro", "--variant", "high"}, nil},
 		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},
 		{"cursor:sonnet-4", "agent", []string{"--model", "sonnet-4"}, nil},
 		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session", "--thinking", "--no-tools", "--no-skills"}},
@@ -121,7 +122,7 @@ func TestResumeArgs(t *testing.T) {
 		want          []string
 	}{
 		{"claude", "abc", []string{"-r", "abc"}},
-		{"opencode:kimi-k2", "abc", []string{"-s", "abc"}},
+		{"opencode:opencode/deepseek-v4-flash", "abc", []string{"-s", "abc"}},
 		{"cursor", "abc", []string{"--resume", "abc"}},
 		{"agy", "abc", []string{"--conversation", "abc"}},
 		{"gemini:gemini-3.1-pro", "abc", []string{"--conversation", "abc"}},

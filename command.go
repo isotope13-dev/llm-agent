@@ -105,9 +105,15 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		return cmd, nil
 
 	case "opencode":
-		args := []string{"run", "--format", "json"}
+		// `run` is non-interactive, but tool permissions still require explicit
+		// approval. --auto grants those permissions for unattended queue workers.
+		// OpenCode calls its model-specific reasoning setting a variant.
+		args := []string{"run", "--format", "json", "--auto"}
 		if model != "" {
 			args = append(args, "--model", model)
+		}
+		if effort != "" {
+			args = append(args, "--variant", effort)
 		}
 		args = append(args, agent.ExtraArgs...)
 		cmd := exec.CommandContext(ctx, "opencode", args...)

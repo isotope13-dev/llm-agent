@@ -49,7 +49,7 @@ type Agent struct {
 	probeErr error
 
 	// Provider is the agent name, optionally with a model suffix:
-	// "claude", "agy:gemini-3.1-pro", "opencode:kimi-k2".
+	// "claude", "agy:gemini-3.1-pro", "opencode:opencode/deepseek-v4-flash".
 	Provider string
 
 	// TmpDir, when non-empty, is exported as TMPDIR/TMP/TEMP to the

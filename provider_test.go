@@ -12,7 +12,7 @@ func TestBaseAndModel(t *testing.T) {
 		{"gemini", "gemini", "", false},
 		{"gemini:gemini-2.5-pro", "gemini", "gemini-2.5-pro", false},
 		{"opencode", "opencode", "", true},
-		{"opencode:kimi-k2", "opencode", "kimi-k2", true},
+		{"opencode:opencode/deepseek-v4-flash", "opencode", "opencode/deepseek-v4-flash", true},
 		{"pi", "pi", "", true},
 		{"pi:some-model", "pi", "some-model", true},
 		{"codex", "codex", "", false},
