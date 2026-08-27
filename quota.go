@@ -48,8 +48,9 @@ var quotaPatterns = []string{
 	"exhausted your capacity",
 	"too many requests",
 	"usage limit",
-	"usage_limit", // codex: usage_limit_reached error codes
-	"usagelimit",  // codex: UsageLimitReachedError payloads
+	"usage_limit",  // codex: usage_limit_reached error codes
+	"usagelimit",   // codex: UsageLimitReachedError payloads
+	"out of usage", // cursor: "You're out of usage" ActionRequiredError
 	"429",
 }
 
@@ -135,10 +136,16 @@ var clockLayouts = []string{
 	"15:04",
 }
 
+// ordinalDayRe matches an English ordinal suffix on a day number ("Sep 1st,
+// 2026"). Codex renders far-off resets that way, and Go's reference layouts
+// have no verb for it, so the suffix is stripped before parsing.
+var ordinalDayRe = regexp.MustCompile(`(?i)\b(\d{1,2})(st|nd|rd|th)\b`)
+
 // parseClockTime parses an absolute reset time in the host's local timezone
 // (codex formats the timestamp on this same host). Layouts without a year or
 // date resolve to the next future occurrence relative to now.
 func parseClockTime(s string, now time.Time) (time.Time, bool) {
+	s = ordinalDayRe.ReplaceAllString(s, "$1")
 	for _, layout := range clockLayouts {
 		t, err := time.ParseInLocation(layout, s, now.Location())
 		if err != nil {

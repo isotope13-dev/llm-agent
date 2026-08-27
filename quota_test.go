@@ -90,6 +90,28 @@ func TestDetectQuota(t *testing.T) {
 			want:       true,
 			wantDetail: "resets in 2h30m0s",
 		},
+		{
+			// Codex renders a far-off reset with an ordinal day, which no Go
+			// reference layout accepts; the suffix is stripped before parsing.
+			name:       "codex usage limit with ordinal day",
+			input:      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 1st, 2026 10:13 AM.",
+			want:       true,
+			wantDetail: "resets at 2026-09-01T10:13:00-04:00",
+		},
+		{
+			name:       "ordinal day rd suffix",
+			input:      "You've hit your usage limit. Try again at Oct 23rd, 2026 8:00 AM.",
+			want:       true,
+			wantDetail: "resets at 2026-10-23T08:00:00-04:00",
+		},
+		{
+			// Cursor names neither "quota" nor "limit" in the phrase that
+			// actually reports exhaustion, so it read as a generic failure and
+			// took a short blacklist instead of a quota cooldown.
+			name:  "cursor out of usage",
+			input: "cursor:composer-2.5 failed: exit status 1:\nActionRequiredError: Increase limits for faster responses You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.",
+			want:  true,
+		},
 		{name: "rate limit", input: "Error: rate limit exceeded, too many requests", want: true},
 		{name: "429", input: "HTTP 429: Too Many Requests", want: true},
 		{name: "normal error", input: "connection refused", want: false},
@@ -131,8 +153,9 @@ func TestParseResetDuration(t *testing.T) {
 		{"resets in 5m30s", 5*time.Minute + 30*time.Second},
 		{"resets in 2 hours 30 minutes", 2*time.Hour + 30*time.Minute},
 		{"resets at " + now.Add(3*time.Hour).Format(time.RFC3339), 3 * time.Hour},
-		{"resets at " + now.Add(-time.Hour).Format(time.RFC3339), minResetCooldown}, // already reset
-		{"resets at " + now.AddDate(1, 0, 0).Format(time.RFC3339), DefaultCooldown}, // implausibly far: misparse guard
+		{"resets at " + now.Add(-time.Hour).Format(time.RFC3339), minResetCooldown},       // already reset
+		{"resets at " + now.Add(5*24*time.Hour).Format(time.RFC3339), 5 * 24 * time.Hour}, // codex weekly window
+		{"resets at " + now.AddDate(1, 0, 0).Format(time.RFC3339), DefaultCooldown},       // implausibly far: misparse guard
 		{"resets at not-a-timestamp", DefaultCooldown},
 		{"", DefaultCooldown},
 		{"some random text", DefaultCooldown},
