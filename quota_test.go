@@ -169,3 +169,28 @@ func TestParseResetDuration(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectQuotaBalanceExhaustion covers prepaid-balance blocks, which are not
+// rate limits but must take the same cooldown-and-retry path: they clear when a
+// human tops up, so a blacklist (or a latched probe failure) would strand a
+// provider that is one payment away from working.
+func TestDetectQuotaBalanceExhaustion(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "opencode zen insufficient balance",
+			input: "APIError: Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_01/billing",
+		},
+		{name: "snake case variant", input: `{"code":"insufficient_balance"}`},
+		{name: "http 402", input: "unexpected status 402 Payment Required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := DetectQuota(tt.input); !ok {
+				t.Errorf("DetectQuota(%q) = false, want true", tt.input)
+			}
+		})
+	}
+}

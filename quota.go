@@ -9,8 +9,14 @@ import (
 )
 
 // DefaultCooldown is the cooldown applied when a quota error has no parseable
-// reset time.
-const DefaultCooldown = 60 * time.Minute
+// reset time. Two hours, not one: the providers that report a bare exhaustion
+// with no reset -- cursor's "You're out of usage" is the standing example --
+// are the ones whose limit is a plan or billing-period allowance rather than a
+// rolling hourly window, so a shorter wait mostly buys another rejection. Each
+// expiry costs one wasted invoke per provider variant, and nothing recovers
+// sooner for having been asked more often. A provider that does publish a
+// reset time never reaches this constant.
+const DefaultCooldown = 2 * time.Hour
 
 // minResetCooldown floors parsed reset times: a reset in the past (clock skew,
 // or the window rolled over while the error was in flight) or a sub-minute
@@ -52,6 +58,18 @@ var quotaPatterns = []string{
 	"usagelimit",   // codex: UsageLimitReachedError payloads
 	"out of usage", // cursor: "You're out of usage" ActionRequiredError
 	"429",
+	// Prepaid-balance exhaustion. Not a rate limit, but the same shape from a
+	// caller's view: the binary ran, the credential authenticated, the backend
+	// answered, and the block clears when a human tops up rather than when
+	// anything is retried. Classifying it here keeps it on the cooldown path
+	// instead of the blacklist, and -- because probe verdicts latch for the
+	// process lifetime -- stops a funded account from staying retired until
+	// the next restart. OpenCode Zen: "APIError: Insufficient balance."
+	"insufficient balance",
+	"insufficient_balance",
+	"insufficient funds",
+	"payment required",
+	"402",
 }
 
 // DetectQuota reports whether output contains a quota or rate-limit signal,

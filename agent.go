@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -501,18 +502,29 @@ func (a *Agent) runProbe(ctx context.Context) error {
 
 	select {
 	case <-stdoutTail.first:
+		// Output started. Give the provider a bounded moment to finish the
+		// line so the verdict classifies a whole event rather than a prefix.
+		// stdoutDone carries a single buffered value, so note when this drains
+		// it -- receiving it twice would block forever.
+		stdoutEnded := false
+		select {
+		case <-stdoutTail.line:
+		case <-stdoutDone:
+			stdoutEnded = true
+		case <-time.After(probeLineGrace):
+		}
 		killProcess(cmd)
-		_ = cmd.Wait() //nolint:errcheck // killed after successful first byte
-		<-stdoutDone
+		_ = cmd.Wait() //nolint:errcheck // killed after capturing the first line
+		if !stdoutEnded {
+			<-stdoutDone
+		}
 		<-stderrDone
-		a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
-		return nil
+		return a.probeVerdict(cmd, stdoutTail.String(), stderrTail.String())
 	case <-stdoutDone:
 		waitErr := cmd.Wait()
 		<-stderrDone
 		if strings.TrimSpace(stdoutTail.String()) != "" {
-			a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
-			return nil
+			return a.probeVerdict(cmd, stdoutTail.String(), stderrTail.String())
 		}
 		return a.probeFailureError(cmd, waitErr, stdoutTail.String(), stderrTail.String())
 	case <-timer.C:
@@ -557,6 +569,107 @@ func (a *Agent) probeCancelledError(cmd *exec.Cmd, waitErr, ctxErr error, stdout
 	}
 	return fmt.Errorf("probe %s %s cancelled: %w; killed process (%s)",
 		a.Provider, describeCmd(cmd), ctxErr, probeExitStatus(waitErr))
+}
+
+// probeLineGrace bounds how long Probe waits, after the first byte, for the
+// rest of that line. Providers emit their first event in one write, so this
+// almost never elapses; it exists so a provider that dribbles a partial line
+// cannot stall the probe until its full timeout.
+const probeLineGrace = 2 * time.Second
+
+// probeVerdict decides whether probe output actually indicates a working
+// provider. Producing bytes is not evidence of health: a provider whose
+// credential is missing or whose backend rejects the request launches
+// normally, prints one error event, and exits 1. Treating that as success --
+// as this probe did until it started reading the line it captured -- makes
+// every failover chain lead with a provider that cannot work, and the failure
+// only surfaces once per real batch. An opencode credential invisible to its
+// service account went undetected this way for three days, logging
+// "llmagent probe ok" immediately before each failed invoke.
+//
+// Quota and transient conditions deliberately pass. They prove the opposite of
+// a broken provider -- the binary ran, the credential authenticated, the
+// backend answered -- and they clear on their own. Probe results are latched
+// for the process lifetime (see Probe), so failing here would retire a
+// provider that is merely out of budget this hour; that belongs to the
+// caller's cooldown, which already reads these same signals off the real run.
+func (a *Agent) probeVerdict(cmd *exec.Cmd, stdout, stderr string) error {
+	combined := stdout + "\n" + stderr
+	if _, ok := DetectQuota(combined); ok {
+		a.logger().Info("llmagent probe ok (quota-limited; deferring to run-time cooldown)",
+			slog.String("provider", a.Provider))
+		return nil
+	}
+	if DetectTransient(combined) {
+		a.logger().Info("llmagent probe ok (transient backend error)",
+			slog.String("provider", a.Provider))
+		return nil
+	}
+	if msg := detectStreamError(stdout); msg != "" {
+		return fmt.Errorf("probe %s %s reported an error: %s", a.Provider, describeCmd(cmd), msg)
+	}
+	a.logger().Info("llmagent probe ok", slog.String("provider", a.Provider))
+	return nil
+}
+
+// detectStreamError returns the message from the first stream event that
+// declares a failure, or "" if none does. Every provider renders one as a JSON
+// object with type "error" (opencode, codex, agy) or an is_error flag
+// (claude); the message hides one level deeper for opencode, which nests it
+// under error.data.
+func detectStreamError(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			IsError bool   `json:"is_error"`
+			Error   struct {
+				Name    string `json:"name"`
+				Message string `json:"message"`
+				Data    struct {
+					Message string `json:"message"`
+				} `json:"data"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		if ev.Type != "error" && !ev.IsError {
+			continue
+		}
+		switch {
+		case ev.Error.Data.Message != "":
+			return qualifyErr(ev.Error.Name, ev.Error.Data.Message)
+		case ev.Error.Message != "":
+			return qualifyErr(ev.Error.Name, ev.Error.Message)
+		case ev.Error.Name != "":
+			return ev.Error.Name
+		}
+		return truncateProbeLine(line)
+	}
+	return ""
+}
+
+// qualifyErr prefixes a message with its error name when the provider supplies
+// one; claude reports a bare message, where opencode names the class.
+func qualifyErr(name, msg string) string {
+	if name == "" {
+		return msg
+	}
+	return name + ": " + msg
+}
+
+// truncateProbeLine bounds an unrecognised error event quoted into an error
+// message, so a large payload cannot dominate the log line.
+func truncateProbeLine(s string) string {
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // probePrompt is the trivial input written to stdin during Probe. Pi expects
@@ -662,20 +775,28 @@ func cmdWorkDir(cmd *exec.Cmd) string {
 }
 
 type probeOutput struct { //nolint:govet // Keep synchronisation fields adjacent to the buffer they guard.
-	first chan struct{}
-	once  sync.Once
-	mu    sync.Mutex
-	buf   strings.Builder
+	first    chan struct{}
+	line     chan struct{}
+	once     sync.Once
+	lineOnce sync.Once
+	mu       sync.Mutex
+	buf      strings.Builder
 }
 
 func newProbeOutput() *probeOutput {
-	return &probeOutput{first: make(chan struct{})}
+	return &probeOutput{first: make(chan struct{}), line: make(chan struct{})}
 }
 
 func (p *probeOutput) Write(b []byte) (int, error) {
 	n := len(b)
 	if len(b) > 0 {
 		p.once.Do(func() { close(p.first) })
+	}
+	// A complete line is the unit the verdict can classify: every provider
+	// emits its stream as one JSON object per line, so a whole line is either
+	// a usable event or an error report, where a first-byte prefix is neither.
+	if bytes.IndexByte(b, '\n') >= 0 {
+		p.lineOnce.Do(func() { close(p.line) })
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

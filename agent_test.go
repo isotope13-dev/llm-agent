@@ -318,3 +318,107 @@ func TestRunPropagatesProbeFailure(t *testing.T) {
 		t.Fatal("expected probe failure to propagate")
 	}
 }
+
+// realOpenCodeAuthError is the exact stdout opencode emits when its credential
+// is missing: the probe treated this as success for three days.
+const realOpenCodeAuthError = `{"type":"error","timestamp":1787916359755,"sessionID":"ses_fb7e16991ffeFb0zIF7kPbHziW","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_22970889"}}}`
+
+func TestDetectStreamError(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "opencode missing credential",
+			input: realOpenCodeAuthError,
+			want:  "UnknownError: Unexpected server error. Check server logs for details.",
+		},
+		{
+			name:  "claude is_error flag",
+			input: `{"type":"result","is_error":true,"error":{"message":"overloaded"}}`,
+			want:  "overloaded",
+		},
+		{
+			name:  "healthy opencode first event",
+			input: `{"type":"step_start","sessionID":"ses_abc","part":{"type":"step-start"}}`,
+			want:  "",
+		},
+		{
+			name:  "error event after a healthy one still caught",
+			input: `{"type":"step_start","sessionID":"x"}` + "\n" + realOpenCodeAuthError,
+			want:  "UnknownError: Unexpected server error. Check server logs for details.",
+		},
+		{
+			name:  "plain text is not an error event",
+			input: "Respond with OK\nOK\n",
+			want:  "",
+		},
+		{
+			name:  "malformed json is skipped",
+			input: `{"type":"error"` + "\n",
+			want:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := detectStreamError(tt.input); got != tt.want {
+				t.Errorf("detectStreamError() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeVerdict(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  string
+		stderr  string
+		wantErr bool
+	}{
+		{
+			name:    "healthy stream passes",
+			stdout:  `{"type":"step_start","sessionID":"ses_abc"}`,
+			wantErr: false,
+		},
+		{
+			name:    "missing credential fails",
+			stdout:  realOpenCodeAuthError,
+			wantErr: true,
+		},
+		{
+			// Quota proves the binary ran and authenticated; latching it would
+			// retire a provider that is only out of budget this window.
+			name:    "quota exhaustion passes to the run-time cooldown",
+			stdout:  "ActionRequiredError: Increase limits for faster responses You're out of usage.",
+			wantErr: false,
+		},
+		{
+			name:    "quota reported as a structured error event still passes",
+			stdout:  `{"type":"error","error":{"name":"RateLimit","data":{"message":"rate limit exceeded"}}}`,
+			wantErr: false,
+		},
+		{
+			// A funded account one top-up away from working must not be
+			// latched off by a probe that only runs once per process.
+			name:    "balance exhaustion passes to the run-time cooldown",
+			stdout:  `{"type":"error","error":{"name":"APIError","data":{"message":"Insufficient balance. Manage your billing here: https://opencode.ai/x/billing"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "error only on stderr is not a stream error",
+			stdout:  `{"type":"step_start"}`,
+			stderr:  "some warning",
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Agent{Provider: "opencode"}
+			err := a.probeVerdict(nil, tt.stdout, tt.stderr)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("probeVerdict() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
