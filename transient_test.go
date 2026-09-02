@@ -55,7 +55,10 @@ func TestRunnerRetriesTransient(t *testing.T) {
 		t.Errorf("Provider = %q, want good", res.Provider)
 	}
 
-	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
 	if want := 1 + defaultTransientRetries; len(calls) != want {
 		t.Errorf("flaky invoked %d times, want %d (1 + %d retries)", len(calls), want, defaultTransientRetries)
 	}

@@ -627,21 +627,23 @@ func (a *Agent) probeVerdict(cmd *exec.Cmd, stdout, stderr string) error {
 // (claude); the message hides one level deeper for opencode, which nests it
 // under error.data.
 func detectStreamError(output string) string {
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") {
 			continue
 		}
+		// Field order is govet's fieldalignment ordering (the bool last), not a
+		// grouping anyone chose.
 		var ev struct {
-			Type    string `json:"type"`
-			IsError bool   `json:"is_error"`
-			Error   struct {
+			Type  string `json:"type"`
+			Error struct {
 				Name    string `json:"name"`
 				Message string `json:"message"`
 				Data    struct {
 					Message string `json:"message"`
 				} `json:"data"`
 			} `json:"error"`
+			IsError bool `json:"is_error"`
 		}
 		if json.Unmarshal([]byte(line), &ev) != nil {
 			continue
@@ -674,11 +676,11 @@ func qualifyErr(name, msg string) string {
 // truncateProbeLine bounds an unrecognised error event quoted into an error
 // message, so a large payload cannot dominate the log line.
 func truncateProbeLine(s string) string {
-	const max = 200
-	if len(s) <= max {
+	const limit = 200
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:limit] + "..."
 }
 
 // probePrompt is the trivial input written to stdin during Probe. Pi expects

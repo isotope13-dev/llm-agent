@@ -154,7 +154,7 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 			"--disable-approval",
 			"--disable-sandbox",
 			// Relative: Run writes it into the workdir, which is this cmd's Dir.
-			"--prompt-file", musePromptFile,
+			"--prompt-file", promptFile(agent.Provider),
 		}
 		if model != "" {
 			args = append(args, "--model", model)
@@ -191,26 +191,20 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 	return nil, fmt.Errorf("llmagent: unknown provider %q", agent.Provider)
 }
 
-// Prompt files. Cursor and muse both read the prompt from a file in the
-// workdir rather than from stdin: cursor's argv points its agent at PROMPT.md,
-// and `muse exec` takes --prompt-file and refuses a pipe outright ("--prompt-file
-// /dev/stdin is not a regular file"), leaving argv as the only alternative and
-// ARG_MAX as the reason not to use it.
-const (
-	cursorPromptFile = "PROMPT.md"
-	musePromptFile   = "MUSE_PROMPT.md"
-)
-
 // promptFile returns the workdir-relative file a provider reads its prompt
-// from, or "" for the providers that take it on stdin. Run writes the file
-// before starting the command and leaves it in place, since deleting it while
-// the subprocess may still be reading loses the prompt.
+// from, or "" for the providers that take it on stdin. Cursor's argv points its
+// agent at PROMPT.md; `muse exec` takes --prompt-file and refuses a pipe
+// outright ("--prompt-file /dev/stdin is not a regular file"), leaving argv as
+// the only alternative and ARG_MAX as the reason not to use it.
+//
+// Run writes the file before starting the command and leaves it in place, since
+// deleting it while the subprocess may still be reading loses the prompt.
 func promptFile(provider string) string {
 	switch Base(provider) {
 	case "cursor":
-		return cursorPromptFile
+		return "PROMPT.md"
 	case "muse":
-		return musePromptFile
+		return "MUSE_PROMPT.md"
 	}
 	return ""
 }

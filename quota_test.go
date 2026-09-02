@@ -67,9 +67,10 @@ func TestDetectQuota(t *testing.T) {
 			wantDetail: "resets at " + time.Unix(now.Add(97*time.Minute).Unix(), 0).Format(time.RFC3339),
 		},
 		{
-			name:       "codex structured resets_at rfc3339",
-			input:      `usage_limit_reached: {"resets_at":"2026-07-15T02:00:00Z"}`,
-			want:       true,
+			name:  "codex structured resets_at rfc3339",
+			input: `usage_limit_reached: {"resets_at":"2026-07-15T02:00:00Z"}`,
+			want:  true,
+			//nolint:gosmopolitan // mirrors parseResetsAtField's deliberate local render
 			wantDetail: "resets at " + time.Date(2026, time.July, 15, 2, 0, 0, 0, time.UTC).Local().Format(time.RFC3339),
 		},
 		{

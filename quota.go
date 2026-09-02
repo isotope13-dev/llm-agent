@@ -182,6 +182,8 @@ func parseClockTime(s string, now time.Time) (time.Time, bool) {
 			if t.Before(now.Add(-time.Hour)) {
 				t = t.AddDate(1, 0, 0)
 			}
+		default:
+			// Layouts carrying a full date need no fixup.
 		}
 		return t, true
 	}
@@ -201,7 +203,10 @@ func parseResetsAtField(output string) (time.Time, bool) {
 	}
 	if m[1] != "" {
 		if t, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
-			return t.Local(), true
+			// Local on purpose: the parsed instant is rendered into a detail
+			// string an operator reads on this host, alongside parseClockTime's
+			// results, which the provider already formatted in local time.
+			return t.Local(), true //nolint:gosmopolitan // operator-facing local render, not storage
 		}
 		return time.Time{}, false
 	}
@@ -242,6 +247,9 @@ func parseHumanDuration(s string) time.Duration {
 			scale = time.Minute
 		case unit[0] == 's':
 			scale = time.Second
+		default:
+			// Unreachable while durationTokenRe owns the unit alphabet; a scale
+			// of zero contributes nothing either way.
 		}
 		total += time.Duration(v * float64(scale))
 	}

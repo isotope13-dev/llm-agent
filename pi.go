@@ -250,18 +250,19 @@ func piCaptureFilter(line string) bool {
 	}
 	switch ev.Type {
 	case "message_update":
+		// Thinking events are noise, and text_delta also carries a cumulative
+		// `partial`, so capturing every one is quadratic in the message length.
+		// The trailing text_end carries the full content and is what the
+		// consumer reads, so the deltas can go.
 		switch ev.AssistantMessageEvent.Type {
-		case "thinking_delta", "thinking_start", "thinking_end":
+		case "thinking_delta", "thinking_start", "thinking_end", "text_delta":
 			return false
-		case "text_delta":
-			// text_delta also carries cumulative `partial`; the equivalent
-			// non-quadratic representation is the trailing text_end event,
-			// which carries the full content. Drop deltas to keep Output
-			// bounded; the consumer reads text_end.
-			return false
+		default:
+			return true
 		}
 	case "tool_execution_update":
 		return false
+	default:
+		return true
 	}
-	return true
 }

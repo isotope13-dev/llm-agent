@@ -34,16 +34,20 @@ func main() {
 	timeout := flag.Duration("timeout", 3*time.Minute, "per-spec timeout")
 	verbose := flag.Bool("v", false, "log probe argv and provider events")
 	flag.Parse()
+	// main does nothing but map the exit code, so the deferred cleanup in run
+	// still happens — an os.Exit down there would skip the workdir removal.
+	os.Exit(run(flag.Args(), *timeout, *verbose))
+}
 
-	specs := flag.Args()
+func run(specs []string, timeout time.Duration, verbose bool) int {
 	if len(specs) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: spec-probe [-timeout d] <provider[:model][@effort]>...")
 		fmt.Fprintln(os.Stderr, "runs a real one-word completion per spec; verifies auth AND model name")
-		os.Exit(2)
+		return 2
 	}
 
 	level := slog.LevelError
-	if *verbose {
+	if verbose {
 		level = slog.LevelInfo
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
@@ -51,13 +55,13 @@ func main() {
 	workdir, err := os.MkdirTemp("", "spec-probe-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tempdir:", err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(workdir) //nolint:errcheck // best-effort cleanup
 
 	failed := false
 	for _, spec := range specs {
-		ok, detail, elapsed := runSpec(spec, workdir, *timeout, logger)
+		ok, detail, elapsed := runSpec(spec, workdir, timeout, logger)
 		if ok {
 			fmt.Printf("OK    %-36s base=%-7s model=%-22s effort=%-6s (%s)\n",
 				spec, llmagent.Base(spec), llmagent.Model(spec), llmagent.Effort(spec), elapsed)
@@ -67,18 +71,21 @@ func main() {
 		fmt.Printf("FAIL  %-36s %s (%s)\n", spec, detail, elapsed)
 	}
 	if failed {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
-func runSpec(spec, workdir string, timeout time.Duration, logger *slog.Logger) (bool, string, time.Duration) {
+// runSpec reports whether the spec completed a round trip, the reason it did
+// not, and how long the attempt took.
+func runSpec(spec, workdir string, timeout time.Duration, logger *slog.Logger) (ok bool, detail string, elapsed time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	a := &llmagent.Agent{Provider: spec, Logger: logger}
 	start := time.Now()
 	res, err := a.Run(ctx, probePrompt, workdir, llmagent.RunOptions{Logger: logger})
-	elapsed := time.Since(start).Round(time.Millisecond)
+	elapsed = time.Since(start).Round(time.Millisecond)
 
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
