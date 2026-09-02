@@ -24,6 +24,7 @@ var localProviders = []localProvider{
 	{name: "codex", bin: "codex"},
 	{name: "opencode", bin: "opencode"},
 	{name: "pi", bin: "pi"},
+	{name: "muse", bin: "muse"},
 }
 
 func main() {

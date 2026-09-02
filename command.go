@@ -9,11 +9,11 @@ import (
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
 // IncludeDirs, Model, TmpDir, Env, and ExtraArgs. It supports the providers
 // cyclotron uses today: claude, agy (alias: gemini), codex, opencode, pi,
-// cursor.
+// cursor, muse.
 //
 // The returned command:
-//   - reads its prompt from stdin (agy as one stream-json message; cursor
-//     reads PROMPT.md, written by Run);
+//   - reads its prompt from stdin (agy as one stream-json message; cursor and
+//     muse read a file in the workdir, written by Run -- see promptFile);
 //   - has TmpDir injected as TMPDIR/TMP/TEMP via Env;
 //   - has any Agent.ExtraArgs appended after the built-in flags (and before
 //     a trailing positional, e.g. codex's `-` or cursor's prompt argument);
@@ -134,6 +134,41 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		cmd.Env = agent.processEnv()
 		return cmd, nil
 
+	case "muse":
+		// Muse Code's headless mode. Approval and an OS sandbox are both on by
+		// default and both have to go for an unattended run: there is nobody to
+		// answer an approval prompt, and the sandbox is namespace-based, so it
+		// cannot start under a systemd unit with RestrictNamespaces=true -- the
+		// same wall codex's bwrap layer hits above. muse also offers --yolo,
+		// which is these two flags plus trusting the workspace; that third
+		// effect loads the workspace's own skills and rules into the agent, so
+		// it is left to callers who want it via ExtraArgs rather than taken by
+		// default on a tree the agent itself writes to.
+		//
+		// No directory allow-list: muse roots its file tools at a single
+		// --workspace, defaulting to the cwd Run already sets to the workdir,
+		// and with the sandbox off those tools reach absolute paths outside it
+		// anyway. IncludeDirs has nothing to say here.
+		args := []string{
+			"exec", "--json",
+			"--disable-approval",
+			"--disable-sandbox",
+			// Relative: Run writes it into the workdir, which is this cmd's Dir.
+			"--prompt-file", musePromptFile,
+		}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		// muse spells reasoning effort --reasoning-effort and takes
+		// none|minimal|low|medium|high|xhigh|ultra, defaulting to high.
+		if effort != "" {
+			args = append(args, "--reasoning-effort", effort)
+		}
+		args = append(args, agent.ExtraArgs...)
+		cmd := exec.CommandContext(ctx, "muse", args...)
+		cmd.Env = agent.processEnv()
+		return cmd, nil
+
 	case "cursor":
 		// Cursor's agent binary takes the prompt as a positional argv;
 		// Run writes PROMPT.md into the workdir.
@@ -156,6 +191,30 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 	return nil, fmt.Errorf("llmagent: unknown provider %q", agent.Provider)
 }
 
+// Prompt files. Cursor and muse both read the prompt from a file in the
+// workdir rather than from stdin: cursor's argv points its agent at PROMPT.md,
+// and `muse exec` takes --prompt-file and refuses a pipe outright ("--prompt-file
+// /dev/stdin is not a regular file"), leaving argv as the only alternative and
+// ARG_MAX as the reason not to use it.
+const (
+	cursorPromptFile = "PROMPT.md"
+	musePromptFile   = "MUSE_PROMPT.md"
+)
+
+// promptFile returns the workdir-relative file a provider reads its prompt
+// from, or "" for the providers that take it on stdin. Run writes the file
+// before starting the command and leaves it in place, since deleting it while
+// the subprocess may still be reading loses the prompt.
+func promptFile(provider string) string {
+	switch Base(provider) {
+	case "cursor":
+		return cursorPromptFile
+	case "muse":
+		return musePromptFile
+	}
+	return ""
+}
+
 // resumeArgs returns CLI flags to resume sessionID for an existing provider,
 // or nil if the provider does not support explicit session IDs. codex is
 // excluded because it emits no resumable session ID.
@@ -175,6 +234,11 @@ func resumeArgs(provider, sessionID string) []string {
 		return []string{"-s", sessionID}
 	case "cursor":
 		return []string{"--resume", sessionID}
+	case "muse":
+		// muse exec has no --resume: naming a session id adopts it, creating the
+		// session on first use and continuing it after, which is the same
+		// contract from this side.
+		return []string{"--session-id", sessionID}
 	}
 	return nil
 }

@@ -27,6 +27,11 @@ func TestDefaultCommand(t *testing.T) {
 		{"opencode:opencode/deepseek-v4-flash", "opencode", []string{"--model", "opencode/deepseek-v4-flash"}, nil},
 		{"opencode:opencode/deepseek-v4-pro@high", "opencode", []string{"--model", "opencode/deepseek-v4-pro", "--variant", "high"}, nil},
 		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},
+		// muse's approval prompt and namespace sandbox are both on by default
+		// and both block an unattended run. --yolo would take those two plus
+		// trusting the workspace, which is the caller's call, not ours.
+		{"muse", "muse", []string{"exec", "--json", "--disable-approval", "--disable-sandbox", "--prompt-file MUSE_PROMPT.md"}, []string{"--yolo", "--model", "--reasoning-effort", "--add-dir"}},
+		{"muse:muse-spark-1.2-contributor@high", "muse", []string{"--model muse-spark-1.2-contributor", "--reasoning-effort high"}, []string{"--effort", "--variant"}},
 		{"cursor:sonnet-4", "agent", []string{"--model", "sonnet-4"}, nil},
 		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session", "--thinking", "--no-tools", "--no-skills"}},
 		{"pi:anthropic/claude-sonnet-4-20250514", "pi", []string{"--mode", "rpc", "--model", "anthropic/claude-sonnet-4-20250514"}, []string{"--no-session", "--thinking", "--no-tools", "--no-skills"}},
@@ -126,6 +131,7 @@ func TestResumeArgs(t *testing.T) {
 		{"cursor", "abc", []string{"--resume", "abc"}},
 		{"agy", "abc", []string{"--conversation", "abc"}},
 		{"gemini:gemini-3.1-pro", "abc", []string{"--conversation", "abc"}},
+		{"muse:muse-spark-1.2", "abc", []string{"--session-id", "abc"}},
 		{"codex", "abc", nil},
 		{"claude", "", nil},
 	}

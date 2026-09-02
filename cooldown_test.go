@@ -1,6 +1,7 @@
 package llmagent
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -102,5 +103,40 @@ func TestStatusesAndFormat(t *testing.T) {
 	}
 	if got := FormatStatuses(statuses); got != "a=1h0m0s (quota: resets in 1h)" {
 		t.Errorf("FormatStatuses = %q", got)
+	}
+}
+
+// A quota belongs to an account, not to a model spec. One entry keyed on the
+// provider base must bench every spelling of that vendor a chain addresses,
+// because they are one credential — and clearing any one of them must lift it,
+// since a provider that just answered proves the account works.
+func TestAccountScopedCooldownCoversEverySpecOnTheVendor(t *testing.T) {
+	chain := []string{
+		"claude:opus@low", "claude:sonnet@high", "codex:gpt-5.6-luna@high", "agy:gemini-3.7-flash-low",
+	}
+	c := NewCooldownTracker()
+	c.Set(Base("claude:opus@low"), time.Hour, "quota")
+
+	for _, spec := range []string{"claude:opus@low", "claude:sonnet@high"} {
+		if !c.IsCoolingDown(spec) {
+			t.Errorf("%s not cooling: an account-scoped entry must cover every spec on that vendor", spec)
+		}
+	}
+	if c.IsCoolingDown("codex:gpt-5.6-luna@high") {
+		t.Error("codex is cooling on a claude entry; the base must not match across vendors")
+	}
+
+	got := c.Select(chain)
+	want := []string{"codex:gpt-5.6-luna@high", "agy:gemini-3.7-flash-low"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Select = %v, want only the vendors that are up: %v", got, want)
+	}
+	if n := len(c.Statuses(chain)); n != 2 {
+		t.Errorf("Statuses reported %d cooling specs, want both claude spellings", n)
+	}
+
+	c.Clear("claude:sonnet@high")
+	if c.IsCoolingDown("claude:opus@low") {
+		t.Error("a success on one spec must lift the vendor-wide cooldown for its siblings")
 	}
 }

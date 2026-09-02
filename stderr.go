@@ -9,6 +9,8 @@ var stderrNoise = []string{
 	"Loaded cached credentials",
 	"credentials for project",
 	"Welcome to",
+	"muse: workspace root:", // muse announces its cwd on every start
+	"muse: workspace trust:",
 }
 
 // IsStderrNoise reports whether line matches a known noise pattern.

@@ -202,7 +202,8 @@ func (a *Agent) Run(ctx context.Context, prompt, workdir string, opts RunOptions
 }
 
 // buildCmd materialises the *exec.Cmd for this invocation: resolves resume
-// args, sets the workdir, and writes Cursor's PROMPT.md side-channel.
+// args, sets the workdir, and writes the prompt-file side-channel for the
+// providers that read the prompt from disk (see promptFile).
 func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string) (*exec.Cmd, error) {
 	cmd, err := a.newCmd(ctx)
 	if err != nil {
@@ -214,12 +215,12 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 	cmd.Dir = workdir
 	addTrustedWorkdirArg(a.Provider, cmd)
 
-	if Base(a.Provider) == "cursor" {
-		path := filepath.Join(workdir, "PROMPT.md")
+	if name := promptFile(a.Provider); name != "" {
+		path := filepath.Join(workdir, name)
 		if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
 			return nil, fmt.Errorf("llmagent: write %s: %w", path, err)
 		}
-		// Cursor reads PROMPT.md on start and we leave the file in place;
+		// The provider reads the file on start and we leave it in place;
 		// removing it racing with the subprocess can lose the prompt.
 	}
 	return cmd, nil
@@ -273,12 +274,20 @@ func makePipes(cmd *exec.Cmd) (cmdPipes, error) {
 // feedStdin is the default transport: write the prompt, close stdin. agy
 // frames it as one stream-json message; every other provider takes it
 // verbatim. Pi uses feedPi (in pi.go), which speaks JSON-RPC instead.
+//
+// The providers that already got the prompt as a file get an immediate close
+// and nothing else. They do not read stdin at all, so writing to it would fill
+// the pipe buffer and park this goroutine until the subprocess exits -- which a
+// prompt under 64 KiB hides and a larger one does not.
 func (a *Agent) feedStdin(stdin io.WriteCloser, prompt string) {
 	defer func() {
 		if err := stdin.Close(); err != nil {
 			a.logger().Debug("close stdin", slog.Any("error", err))
 		}
 	}()
+	if promptFile(a.Provider) != "" {
+		return
+	}
 	if usesAgy(a.Provider) {
 		prompt = agyStreamInput(prompt)
 	}
@@ -861,13 +870,21 @@ func killAndReap(cmd *exec.Cmd) {
 }
 
 // extractSessionID parses one stream-json line and returns its sessionID,
-// session_id, or conversation_id (agy), whichever is present. All providers
-// cyclotron supports emit one of these on session-bearing events.
+// session_id, conversation_id (agy), or the id of the session stream the record
+// belongs to (muse), whichever is present. All providers cyclotron supports emit
+// one of these on session-bearing events.
+//
+// muse's is nested because its output is an event-sourced record log rather than
+// a message stream: every line is an envelope naming the stream it belongs to,
+// and the session's id is that stream's id. The envelope is decoded as raw JSON
+// so a provider that happens to put something else under "stream" cannot fail
+// the whole line's decode and silently cost every provider its session.
 func extractSessionID(line string) string {
 	var ev struct {
-		SessionID      string `json:"sessionID"`
-		SID            string `json:"session_id"`
-		ConversationID string `json:"conversation_id"`
+		SessionID      string          `json:"sessionID"`
+		SID            string          `json:"session_id"`
+		ConversationID string          `json:"conversation_id"`
+		Stream         json.RawMessage `json:"stream"`
 	}
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		return ""
@@ -877,6 +894,15 @@ func extractSessionID(line string) string {
 		return ev.SessionID
 	case ev.SID != "":
 		return ev.SID
+	case ev.ConversationID != "":
+		return ev.ConversationID
 	}
-	return ev.ConversationID
+	var stream struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(ev.Stream, &stream); err == nil && stream.Kind == "session" {
+		return stream.ID
+	}
+	return ""
 }

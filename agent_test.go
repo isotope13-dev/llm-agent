@@ -119,6 +119,52 @@ func TestRunCursorWritesPromptFile(t *testing.T) {
 	}
 }
 
+// muse takes its prompt the same way, under its own name, and takes nothing on
+// stdin: a provider that reads a prompt file must not also be fed one, or a
+// prompt past the pipe buffer parks feedStdin until the subprocess exits. The
+// stub reads stdin to EOF to prove Run closed it without writing.
+func TestRunMuseWritesPromptFileAndClosesStdin(t *testing.T) {
+	a := preProbed("muse", `printf 'stdin:[%s] ' "$(cat)"; cat MUSE_PROMPT.md`)
+	res, err := a.Run(context.Background(), "hello muse", t.TempDir(), RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(res.Output, "hello muse") {
+		t.Errorf("prompt file not delivered, Output = %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "stdin:[]") {
+		t.Errorf("stdin was written to, Output = %q", res.Output)
+	}
+}
+
+// muse names the session in the envelope of every record rather than in a
+// top-level field, so this is the one provider whose id would be lost by
+// reading only the flat keys — and losing it silently costs every turn its
+// context. The "stream" key is decoded defensively for the same reason it is
+// read at all: a provider that puts a non-object there must not take the flat
+// keys down with it.
+func TestExtractSessionID(t *testing.T) {
+	tests := []struct {
+		name, line, want string
+	}{
+		{"claude", `{"type":"system","session_id":"s1"}`, "s1"},
+		{"opencode", `{"sessionID":"s2"}`, "s2"},
+		{"agy", `{"event":"init","conversation_id":"s3"}`, "s3"},
+		{"muse", `{"record_type":"event","stream":{"kind":"session","id":"s4"},"payload_type":"tool.result"}`, "s4"},
+		{"muse run stream is not the session", `{"stream":{"kind":"run","id":"r1"}}`, ""},
+		{"stream is not an object", `{"stream":true,"session_id":"s5"}`, "s5"},
+		{"none", `{"type":"result"}`, ""},
+		{"not json", `oops`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractSessionID(tt.line); got != tt.want {
+				t.Errorf("extractSessionID(%s) = %q, want %q", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProbeSuccess(t *testing.T) {
 	a := &Agent{Provider: "mock", NewCmd: shellCmd(`echo ok`)}
 	if err := a.Probe(context.Background()); err != nil {
