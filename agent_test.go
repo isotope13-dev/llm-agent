@@ -3,7 +3,10 @@ package llmagent
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -466,5 +469,64 @@ func TestProbeVerdict(t *testing.T) {
 				t.Fatalf("probeVerdict() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// muse takes its prompt only as --prompt-file and ignores stdin, so a probe
+// that does not write that file starts a process which exits reporting the
+// missing file. This is the shape of that bug: the script fails unless the
+// prompt file is sitting in its working directory.
+func TestProbeWritesPromptFileForPromptFileProviders(t *testing.T) {
+	a := &Agent{
+		Provider: "muse",
+		NewCmd:   shellCmd(`cat MUSE_PROMPT.md >/dev/null || { echo "failed to read --prompt-file MUSE_PROMPT.md" >&2; exit 1; }; echo ok`),
+	}
+	if err := a.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+}
+
+// The file carries the probe's own prompt, and it lands in a directory of the
+// probe's own making: writing into the inherited cwd would leave a stray file
+// in whatever tree the caller is working in.
+func TestProbePromptFileIsIsolatedFromCallerCwd(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{
+		Provider: "muse",
+		TmpDir:   t.TempDir(),
+		Logger:   slog.New(slog.DiscardHandler),
+		NewCmd:   shellCmd(`cat MUSE_PROMPT.md`),
+	}
+	if err := a.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "MUSE_PROMPT.md")); !os.IsNotExist(err) {
+		t.Fatalf("probe left MUSE_PROMPT.md in the caller's cwd (stat err = %v)", err)
+	}
+	// TmpDir is where the probe was told to make its directory, and the
+	// directory does not outlive the probe.
+	entries, err := os.ReadDir(a.TmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("probe left %d entries behind in TmpDir", len(entries))
+	}
+}
+
+// Providers that take the prompt on stdin keep probing in the inherited
+// working directory, and no prompt file is written for them.
+func TestProbeWritesNoPromptFileForStdinProviders(t *testing.T) {
+	a := &Agent{Provider: "mock", NewCmd: shellCmd(`ls MUSE_PROMPT.md PROMPT.md 2>/dev/null; echo ok`)}
+	if err := a.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	for _, name := range []string{"MUSE_PROMPT.md", "PROMPT.md"} {
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Fatalf("probe wrote %s for a stdin provider (stat err = %v)", name, err)
+		}
 	}
 }

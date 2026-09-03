@@ -467,6 +467,36 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", a.Provider, err)
 	}
+	// A prompt-file provider is handed --prompt-file on its argv and reads
+	// stdin not at all, so the probe has to write that file or the process
+	// exits before it produces a line: `muse exec` reported "failed to read
+	// --prompt-file MUSE_PROMPT.md" on every probe, and the chain blacklisted
+	// its own head for twenty minutes a round, on every model, for as long as
+	// this was missing. Run writes the file into the caller's workdir; the
+	// probe has no workdir of its own, and inheriting the caller's cwd is not
+	// an alternative -- it would drop a file into a repository the caller is
+	// about to inspect for changes, and hand muse that tree as its workspace
+	// root. So the probe gets a temp directory that lives exactly as long as
+	// it does. Providers that take the prompt on stdin keep the inherited cwd
+	// they have always probed in.
+	if name := promptFile(a.Provider); name != "" {
+		dir, mkErr := os.MkdirTemp(a.TmpDir, "llmagent-probe-")
+		if mkErr != nil {
+			return fmt.Errorf("probe %s workdir: %w", a.Provider, mkErr)
+		}
+		// Every path out of the select below reaps the process first, so the
+		// directory outlives the reader of the file in it.
+		defer func() {
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				a.logger().Debug("remove probe workdir",
+					slog.String("provider", a.Provider), slog.Any("error", rmErr))
+			}
+		}()
+		if wErr := os.WriteFile(filepath.Join(dir, name), []byte(a.probePrompt()), 0o600); wErr != nil {
+			return fmt.Errorf("probe %s write %s: %w", a.Provider, name, wErr)
+		}
+		cmd.Dir = dir
+	}
 	a.logger().Info("llmagent probe starting",
 		slog.String("provider", a.Provider),
 		slog.Any("argv", cmd.Args),
