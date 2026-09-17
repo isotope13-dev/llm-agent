@@ -552,8 +552,7 @@ func (a *Agent) runProbe(ctx context.Context) error {
 			stdoutEnded = true
 		case <-time.After(probeLineGrace):
 		}
-		killProcess(cmd)
-		_ = cmd.Wait() //nolint:errcheck // killed after capturing the first line
+		_ = stopProcess(cmd) //nolint:errcheck // stopped once the first line was captured
 		if !stdoutEnded {
 			<-stdoutDone
 		}
@@ -567,14 +566,12 @@ func (a *Agent) runProbe(ctx context.Context) error {
 		}
 		return a.probeFailureError(cmd, waitErr, stdoutTail.String(), stderrTail.String())
 	case <-timer.C:
-		killProcess(cmd)
-		waitErr := cmd.Wait()
+		waitErr := stopProcess(cmd)
 		<-stdoutDone
 		<-stderrDone
 		return a.probeTimeoutError(cmd, waitErr, timeout, stdoutTail.String(), stderrTail.String())
 	case <-ctx.Done():
-		killProcess(cmd)
-		waitErr := cmd.Wait()
+		waitErr := stopProcess(cmd)
 		<-stdoutDone
 		<-stderrDone
 		return a.probeCancelledError(cmd, waitErr, ctx.Err(), stdoutTail.String(), stderrTail.String())
@@ -890,6 +887,43 @@ func killProcess(cmd *exec.Cmd) {
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill() //nolint:errcheck // best effort
 	}
+}
+
+// stopGrace bounds how long stopProcess waits for a provider to unwind after
+// SIGTERM. Providers exit their signal handler in milliseconds; the second is
+// headroom for one that flushes to disk on the way out.
+const stopGrace = time.Second
+
+// stopProcess ends cmd and reaps it, asking first and insisting second.
+//
+// Probe kills the provider as soon as it has the evidence it came for, which
+// is almost always mid-startup. A CLI interrupted there has not reached its
+// own cleanup, and whatever it took during startup stays taken: the claude CLI
+// holds a 60s OAuth refresh lock, so a SIGKILLed probe leaves that lock behind
+// and the invocation the probe exists to precede then fails to authenticate
+// against it -- "another Claude Code process is refreshing it or exited
+// mid-refresh" names this exactly. SIGTERM lets the provider release what it
+// holds; SIGKILL remains the backstop for one that ignores it.
+//
+// The returned error is cmd.Wait's, so callers that report an exit status keep
+// reporting the real one.
+func stopProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		// Already gone, or unsignalable: either way Wait is the answer.
+		return <-done
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(stopGrace):
+	}
+	killProcess(cmd)
+	return <-done
 }
 
 func killAndReap(cmd *exec.Cmd) {

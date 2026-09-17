@@ -3,6 +3,7 @@ package llmagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -528,5 +529,40 @@ func TestProbeWritesNoPromptFileForStdinProviders(t *testing.T) {
 		if _, err := os.Stat(name); !os.IsNotExist(err) {
 			t.Fatalf("probe wrote %s for a stdin provider (stat err = %v)", name, err)
 		}
+	}
+}
+
+// A provider killed outright never reaches its own cleanup, and whatever it
+// took during startup stays taken: the claude CLI's OAuth refresh lock
+// outlives the probe by a minute and fails the very invocation the probe
+// exists to precede. The probe has to ask before it insists.
+func TestProbeLetsTheProviderReleaseWhatItHolds(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "refresh.lock")
+	a := &Agent{Provider: "mock", NewCmd: shellCmd(fmt.Sprintf(
+		": >%[1]q; trap 'rm -f %[1]q; exit 0' TERM; echo ok; while :; do sleep 0.05; done", lock))}
+
+	if err := a.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if _, err := os.Stat(lock); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("provider was stopped before it could release its lock: Stat = %v, want not-exist", err)
+	}
+}
+
+// Asking is not waiting indefinitely: a provider that ignores SIGTERM still
+// gets killed, and the probe still returns.
+func TestProbeKillsAProviderThatIgnoresSIGTERM(t *testing.T) {
+	a := &Agent{Provider: "mock", NewCmd: shellCmd(
+		"trap '' TERM; echo ok; while :; do sleep 0.05; done")}
+
+	done := make(chan error, 1)
+	go func() { done <- a.Probe(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+	case <-time.After(stopGrace + 10*time.Second):
+		t.Fatal("Probe hung on a provider that ignores SIGTERM")
 	}
 }
