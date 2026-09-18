@@ -21,12 +21,12 @@ LINTERS :=
 FIXERS :=
 
 GOLANGCI_LINT_CONFIG := $(LINT_ROOT)/.golangci.yml
-GOLANGCI_LINT_VERSION ?= v2.10.1
+GOLANGCI_LINT_VERSION ?= v2.13.1
 GOLANGCI_LINT_BIN := $(LINT_ROOT)/out/linters/golangci-lint-$(GOLANGCI_LINT_VERSION)-$(LINT_ARCH)
 $(GOLANGCI_LINT_BIN):
 	mkdir -p $(LINT_ROOT)/out/linters
 	rm -rf $(LINT_ROOT)/out/linters/golangci-lint-*
-	curl --retry 6 --retry-all-errors --retry-max-time 120 -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LINT_ROOT)/out/linters $(GOLANGCI_LINT_VERSION)
+	curl --retry 6 --retry-all-errors --retry-max-time 120 -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(LINT_ROOT)/out/linters $(GOLANGCI_LINT_VERSION)
 	mv $(LINT_ROOT)/out/linters/golangci-lint $@
 
 LINTERS += golangci-lint-lint

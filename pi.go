@@ -66,11 +66,15 @@ func (s *piSignals) send(v any) error {
 	return s.enc.Encode(v)
 }
 
-// piResponseGrace is the budget we give pi to emit the get_state response
-// after we send the request. After this, we close stdin regardless and let
-// pi exit; the response usually arrives in well under a second. It is a
-// var (not const) so tests can shorten the wait.
-var piResponseGrace = 3 * time.Second
+// defaultPiResponseGrace is the budget we give pi to emit the get_state
+// response after we send the request. After this, we close stdin regardless
+// and let pi exit; the response usually arrives in well under a second.
+//
+// It is a const, and per-Agent via ResponseGrace, because feedPi runs on a
+// goroutine that outlives Run: a package var that tests reassigned raced with
+// that goroutine still reading it (agent_test.go's Cleanup against pi.go's
+// time.After), which -race caught on every pi protocol test.
+const defaultPiResponseGrace = 3 * time.Second
 
 // piSwitchAckGrace is how long feedPi waits for the switch_session response
 // before sending the prompt anyway. Switching is synchronous on pi's side
@@ -150,7 +154,7 @@ func (a *Agent) feedPi(ctx context.Context, stdin io.Closer, prompt, sessionID s
 	// Hold stdin open briefly so pi can emit the get_state response before
 	// we close stdin and trigger its shutdown.
 	select {
-	case <-time.After(piResponseGrace):
+	case <-time.After(a.responseGrace()):
 	case <-ctx.Done():
 	}
 }
@@ -265,4 +269,12 @@ func piCaptureFilter(line string) bool {
 	default:
 		return true
 	}
+}
+
+// responseGrace is the pi response budget for this Agent.
+func (a *Agent) responseGrace() time.Duration {
+	if a.ResponseGrace > 0 {
+		return a.ResponseGrace
+	}
+	return defaultPiResponseGrace
 }

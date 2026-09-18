@@ -113,7 +113,7 @@ func (r *Runner) runWithRetry(ctx context.Context, ag *Agent, prompt, workdir st
 		if attempt >= defaultTransientRetries || !DetectTransient(err.Error()) {
 			return nil, err
 		}
-		backoff := (r.transientBackoff()) << attempt
+		backoff := r.transientBackoff() << attempt
 		r.logger().Warn("llmagent transient provider error; retrying same provider",
 			slog.String("provider", ag.Provider),
 			slog.Int("attempt", attempt+1),

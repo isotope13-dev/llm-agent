@@ -79,6 +79,10 @@ type Agent struct {
 	// limit; the subprocess can stall indefinitely.
 	IdleTimeout time.Duration
 
+	// ResponseGrace overrides how long the pi protocol holds stdin open for a
+	// final response before closing it. Zero means defaultPiResponseGrace.
+	ResponseGrace time.Duration
+
 	// ProbeTimeout overrides the first-byte timeout used by Probe.
 	// Zero picks 75s for cloud providers and 5 min for local ones.
 	ProbeTimeout time.Duration

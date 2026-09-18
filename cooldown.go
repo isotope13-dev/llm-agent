@@ -3,7 +3,7 @@ package llmagent
 import (
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -153,10 +153,10 @@ func (c *CooldownTracker) Select(providers []string) []string {
 	if len(available) > 0 {
 		return available
 	}
-	sort.SliceStable(cooling, func(i, j int) bool {
-		ei, _ := lookup(snap, cooling[i])
-		ej, _ := lookup(snap, cooling[j])
-		return ei.until.Before(ej.until)
+	slices.SortStableFunc(cooling, func(a, b string) int {
+		ea, _ := lookup(snap, a)
+		eb, _ := lookup(snap, b)
+		return ea.until.Compare(eb.until)
 	})
 	return cooling
 }

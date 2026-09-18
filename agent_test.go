@@ -268,11 +268,9 @@ printf '{"type":"response","command":"get_state","success":true,"data":{"session
 // asserts the prompt is wrapped as a JSON command, agent_end signals
 // completion, and the captured sessionFile rides back on Result.SessionID.
 func TestRunPiProtocolFreshSession(t *testing.T) {
-	piResponseGrace = 200 * time.Millisecond
-	t.Cleanup(func() { piResponseGrace = 3 * time.Second })
-
 	const sessionPath = "/tmp/pi-session-fresh.jsonl"
 	a := preProbed("pi", "")
+	a.ResponseGrace = 200 * time.Millisecond
 	a.NewCmd = func(ctx context.Context, _ *Agent) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sh", "-c", piMockScript, "sh", sessionPath), nil
 	}
@@ -298,9 +296,6 @@ func TestRunPiProtocolFreshSession(t *testing.T) {
 // command before the prompt when opts.SessionID is non-empty, and that
 // the captured session file is preserved on Result.
 func TestRunPiProtocolResume(t *testing.T) {
-	piResponseGrace = 200 * time.Millisecond
-	t.Cleanup(func() { piResponseGrace = 3 * time.Second })
-
 	const existingSession = "/tmp/pi-session-resume.jsonl"
 	// This mock reads two control commands (switch_session + prompt),
 	// echoes the first two lines, then emits agent_end + get_state response.
@@ -314,6 +309,7 @@ read state_line
 printf '{"type":"response","command":"get_state","success":true,"data":{"sessionFile":"%s"}}\n' "$1"
 `
 	a := preProbed("pi", "")
+	a.ResponseGrace = 200 * time.Millisecond
 	a.NewCmd = func(ctx context.Context, _ *Agent) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sh", "-c", script, "sh", existingSession), nil
 	}
@@ -343,15 +339,13 @@ printf '{"type":"response","command":"get_state","success":true,"data":{"session
 // get_state response (e.g. it died early), Run still echoes back the
 // requested session ID so the caller's bookkeeping stays consistent.
 func TestRunPiSessionFallsBackToRequested(t *testing.T) {
-	piResponseGrace = 50 * time.Millisecond
-	t.Cleanup(func() { piResponseGrace = 3 * time.Second })
-
 	const sid = "/tmp/pi-session-fallback.jsonl"
 	a := preProbed("pi", `
 read switch_line
 read prompt_line
 printf '{"type":"agent_end"}\n'
 `)
+	a.ResponseGrace = 50 * time.Millisecond
 	res, err := a.Run(context.Background(), "x", t.TempDir(), RunOptions{SessionID: sid})
 	if err != nil {
 		t.Fatalf("Run: %v", err)

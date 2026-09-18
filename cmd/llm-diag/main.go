@@ -89,7 +89,7 @@ func printRows(w io.Writer, rows []row) error {
 		return err
 	}
 	for _, r := range rows {
-		_, err := fmt.Fprintf( //nolint:gosec // CLI table output, not HTML.
+		_, err := fmt.Fprintf(
 			tw, "%s\t%s\t%s\t%s\t%s\n",
 			r.provider, r.binary, r.status, r.path, r.detail,
 		)
