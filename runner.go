@@ -204,21 +204,36 @@ func (r *Runner) maybeCooldown(provider string, err error) {
 		r.setCooldown(provider, d, reason)
 		return
 	}
+	if detail, ok := DetectAuth(err.Error()); ok {
+		// A stale credential does not heal on a timer, so the length here is
+		// not what matters — a human has to re-login. Keep it at the blacklist
+		// length so the provider is picked back up soon after they do, and
+		// spend the reason on the provider's own sentence: this is the one
+		// failure class where the log line has to name the thing to renew.
+		r.setCooldown(provider, r.blacklistCooldown(provider), "auth: "+detail)
+		return
+	}
 	if DetectTransient(err.Error()) {
 		// Survived its in-invoke retries but still overloaded: bench it briefly
 		// (not the full blacklist) so the next batch can pick it right back up.
 		r.setCooldown(provider, CapacityCooldown, "capacity: "+truncate(err.Error(), 80))
 		return
 	}
-	d := BlacklistCooldown
-	if IsLocal(provider) {
-		if r.LocalCooldown > 0 {
-			d = r.LocalCooldown
-		} else {
-			d = 15 * time.Minute
-		}
+	r.setCooldown(provider, r.blacklistCooldown(provider), "blacklisted: "+truncate(err.Error(), 80))
+}
+
+// blacklistCooldown is how long provider sits out a failure that is neither
+// quota nor transient. Local providers get a shorter one: nothing about them is
+// rate-limited, so the usual reason to bench one is a crash or a hang, which is
+// worth re-testing sooner than a cloud provider's.
+func (r *Runner) blacklistCooldown(provider string) time.Duration {
+	if !IsLocal(provider) {
+		return BlacklistCooldown
 	}
-	r.setCooldown(provider, d, "blacklisted: "+truncate(err.Error(), 80))
+	if r.LocalCooldown > 0 {
+		return r.LocalCooldown
+	}
+	return 15 * time.Minute
 }
 
 func (r *Runner) setCooldown(provider string, d time.Duration, reason string) {

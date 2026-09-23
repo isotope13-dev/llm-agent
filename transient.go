@@ -45,10 +45,17 @@ var transientPatterns = []string{
 
 // DetectTransient reports whether output signals a short-lived provider hiccup
 // worth a brief same-provider retry rather than an immediate failover. Quota
-// signals take precedence: a genuine quota/rate-limit error will not clear in a
-// few seconds, so it is not treated as transient even if the wording overlaps.
+// and auth signals take precedence: neither a budget reset nor a stale
+// credential will clear in a few seconds, so neither is treated as transient
+// even when the wording overlaps. Codex is the case that forced the auth check
+// in — it renders a spent refresh token as "Failed to refresh token: 401
+// Unauthorized: ... Please try signing in again", which burned all three
+// in-invoke retries before failing over.
 func DetectTransient(output string) bool {
 	if _, isQuota := DetectQuota(output); isQuota {
+		return false
+	}
+	if _, isAuth := DetectAuth(output); isAuth {
 		return false
 	}
 	lower := strings.ToLower(output)
