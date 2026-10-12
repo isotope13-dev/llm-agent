@@ -94,8 +94,8 @@ func DetectQuota(output string) (detail string, ok bool) {
 //     optional ", 2026" year for far-off resets);
 //  2. a relative duration — gemini's "resets in 8h24m6s", OpenAI's
 //     "try again in 20 seconds" / "in 1.234s", verbose "2 hours 30 minutes";
-//  3. the structured "resets_at" field codex serializes into its JSON error
-//     payloads (unix seconds/millis or RFC3339).
+//  3. the structured "resets_at" (codex) or "resetsAt" (Claude Code) field
+//     serialized into JSON error payloads (unix seconds/millis or RFC3339).
 func extractQuotaDetail(output, lower string) string {
 	now := timeNow()
 	for _, marker := range []string{"try again at ", "resets at "} {
@@ -190,11 +190,11 @@ func parseClockTime(s string, now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// resetsAtRe matches the "resets_at" field of codex's UsageLimitReachedError /
-// RateLimitWindow JSON payloads: unix seconds, unix millis, or an RFC3339
-// string. The first match wins — the top-level (blocking) window serializes
-// before the nested rate_limits windows.
-var resetsAtRe = regexp.MustCompile(`"resets_at"\s*:\s*(?:"([^"]+)"|(\d{9,13}))`)
+// resetsAtRe matches reset fields in provider JSON payloads: codex uses
+// "resets_at" and Claude Code uses "resetsAt". Values may be unix seconds,
+// unix millis, or an RFC3339 string. The first match wins — the top-level
+// (blocking) window serializes before nested windows in both formats.
+var resetsAtRe = regexp.MustCompile(`"(?:resets_at|resetsAt)"\s*:\s*(?:"([^"]+)"|(\d{9,13}))`)
 
 func parseResetsAtField(output string) (time.Time, bool) {
 	m := resetsAtRe.FindStringSubmatch(output)

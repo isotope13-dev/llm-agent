@@ -67,6 +67,17 @@ func TestDetectQuota(t *testing.T) {
 			wantDetail: "resets at " + time.Unix(now.Add(97*time.Minute).Unix(), 0).Format(time.RFC3339),
 		},
 		{
+			name: "Claude Code weekly quota with camel-case reset timestamp",
+			input: `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":` +
+				fmt.Sprint(now.Add(3*24*time.Hour+90*time.Minute).Unix()) +
+				`,"rateLimitType":"seven_day","unifiedWindows":{"five_hour":{"resetsAt":` +
+				fmt.Sprint(now.Add(time.Hour).Unix()) + `,"utilization":0},"seven_day":{"resetsAt":` +
+				fmt.Sprint(now.Add(3*24*time.Hour+90*time.Minute).Unix()) +
+				`,"utilization":1}}}} You've hit your weekly limit · resets Oct 14 at 11pm (America/New_York)`,
+			want:       true,
+			wantDetail: "resets at " + time.Unix(now.Add(3*24*time.Hour+90*time.Minute).Unix(), 0).Format(time.RFC3339),
+		},
+		{
 			name:  "codex structured resets_at rfc3339",
 			input: `usage_limit_reached: {"resets_at":"2026-07-15T02:00:00Z"}`,
 			want:  true,
