@@ -197,6 +197,9 @@ func TestDetectQuotaBalanceExhaustion(t *testing.T) {
 		},
 		{name: "snake case variant", input: `{"code":"insufficient_balance"}`},
 		{name: "http 402", input: "unexpected status 402 Payment Required"},
+		{name: "anthropic credit balance", input: `{"type":"result","is_error":true,"result":"Credit balance is too low"}`},
+		{name: "claude bare limit result", input: `{"type":"result","is_error":true,"result":"You've hit your limit · resets 3am (America/New_York)"}`},
+		{name: "claude weekly limit result", input: `{"type":"result","is_error":true,"result":"You've hit your weekly limit · resets Nov 9 at 11pm"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

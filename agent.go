@@ -674,7 +674,10 @@ func detectStreamError(output string) string {
 					Message string `json:"message"`
 				} `json:"data"`
 			} `json:"error"`
-			IsError bool `json:"is_error"`
+			// Claude's failed result event carries its human message here, after
+			// a usage block long enough to push it past truncateProbeLine.
+			Result  string `json:"result"`
+			IsError bool   `json:"is_error"`
 		}
 		if json.Unmarshal([]byte(line), &ev) != nil {
 			continue
@@ -689,6 +692,8 @@ func detectStreamError(output string) string {
 			return qualifyErr(ev.Error.Name, ev.Error.Message)
 		case ev.Error.Name != "":
 			return ev.Error.Name
+		case ev.Result != "":
+			return truncateProbeLine(ev.Result)
 		}
 		return truncateProbeLine(line)
 	}

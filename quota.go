@@ -57,6 +57,13 @@ var quotaPatterns = []string{
 	"usage_limit",  // codex: usage_limit_reached error codes
 	"usagelimit",   // codex: UsageLimitReachedError payloads
 	"out of usage", // cursor: "You're out of usage" ActionRequiredError
+	// Claude Code: "You've hit your limit · resets 3am", with weekly, session
+	// and Opus variants. A probe's bare result event carries no
+	// rate_limit_event to match instead.
+	"hit your limit",
+	"hit your weekly limit",
+	"hit your session limit",
+	"hit your opus limit",
 	"429",
 	// Prepaid-balance exhaustion. Not a rate limit, but the same shape from a
 	// caller's view: the binary ran, the credential authenticated, the backend
@@ -68,6 +75,7 @@ var quotaPatterns = []string{
 	"insufficient balance",
 	"insufficient_balance",
 	"insufficient funds",
+	"credit balance is too low", // Anthropic API-key billing
 	"payment required",
 	"402",
 }
