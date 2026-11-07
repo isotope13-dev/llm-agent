@@ -195,6 +195,11 @@ func (r *Runner) maybeCooldown(provider string, err error) {
 	if r.Cooldowns == nil {
 		return
 	}
+	if _, ok := DetectRefusal(err.Error()); ok {
+		// The model refused the prompt; the provider is fine. Benching it
+		// would take it from every other prompt for nothing.
+		return
+	}
 	if detail, ok := DetectQuota(err.Error()); ok {
 		d := ParseResetDuration(detail)
 		reason := "quota"

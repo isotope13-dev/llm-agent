@@ -61,6 +61,9 @@ var authPatterns = []string{
 // on a reset or a top-up, and both wordings overlap this vocabulary closely
 // enough to misfile a wait as a page.
 func DetectAuth(output string) (detail string, ok bool) {
+	if _, refused := DetectRefusal(output); refused {
+		return "", false
+	}
 	if _, isQuota := DetectQuota(output); isQuota {
 		return "", false
 	}

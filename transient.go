@@ -52,6 +52,9 @@ var transientPatterns = []string{
 // Unauthorized: ... Please try signing in again", which burned all three
 // in-invoke retries before failing over.
 func DetectTransient(output string) bool {
+	if _, refused := DetectRefusal(output); refused {
+		return false
+	}
 	if _, isQuota := DetectQuota(output); isQuota {
 		return false
 	}

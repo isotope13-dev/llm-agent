@@ -64,7 +64,6 @@ var quotaPatterns = []string{
 	"hit your weekly limit",
 	"hit your session limit",
 	"hit your opus limit",
-	"429",
 	// Prepaid-balance exhaustion. Not a rate limit, but the same shape from a
 	// caller's view: the binary ran, the credential authenticated, the backend
 	// answered, and the block clears when a human tops up rather than when
@@ -77,19 +76,35 @@ var quotaPatterns = []string{
 	"insufficient funds",
 	"credit balance is too low", // Anthropic API-key billing
 	"payment required",
-	"402",
 }
+
+// quotaStatusRe matches HTTP 429 and 402 as status codes. They are not in
+// quotaPatterns because as bare substrings they match ids: claude's stream
+// carries a uuid per event, and on 2026-11-07 an expired OAuth login was
+// benched as quota because one of them ended in "...5fab2402". A hex digit or
+// hyphen on either side marks a uuid or hash, a digit a longer number.
+var quotaStatusRe = regexp.MustCompile(`(?:^|[^0-9A-Fa-f-])(?:429|402)(?:[^0-9A-Fa-f-]|$)`)
 
 // DetectQuota reports whether output contains a quota or rate-limit signal,
 // and if so returns a human-readable detail string. When the output carries a
 // reset time it is normalized to "resets in <duration>" or "resets at
 // <RFC3339>", both of which ParseResetDuration understands.
+//
+// A refused run is never quota (see DetectRefusal), and claude's rate-limit
+// events count only when they report a rejection.
 func DetectQuota(output string) (detail string, ok bool) {
+	if _, refused := DetectRefusal(output); refused {
+		return "", false
+	}
+	output = withoutAllowedRateLimitEvents(output)
 	lower := strings.ToLower(output)
 	for _, pat := range quotaPatterns {
 		if strings.Contains(lower, strings.ToLower(pat)) {
 			return extractQuotaDetail(output, lower), true
 		}
+	}
+	if quotaStatusRe.MatchString(output) {
+		return extractQuotaDetail(output, lower), true
 	}
 	return "", false
 }
