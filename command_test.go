@@ -32,6 +32,7 @@ func TestDefaultCommand(t *testing.T) {
 		// trusting the workspace, which is the caller's call, not ours.
 		{"muse", "muse", []string{"exec", "--json", "--disable-approval", "--disable-sandbox", "--prompt-file MUSE_PROMPT.md"}, []string{"--yolo", "--model", "--reasoning-effort", "--add-dir"}},
 		{"muse:muse-spark-1.2-contributor@high", "muse", []string{"--model muse-spark-1.2-contributor", "--reasoning-effort high"}, []string{"--effort", "--variant"}},
+		{"muse:muse-ember-1.0@medium", "muse", []string{"--model muse-ember-1.0", "--reasoning-effort medium"}, []string{"--effort", "--variant"}},
 		{"cursor:sonnet-4", "agent", []string{"--model", "sonnet-4"}, nil},
 		{"pi", "pi", []string{"--mode", "rpc"}, []string{"--model", "--no-session", "--thinking", "--no-tools", "--no-skills"}},
 		{"pi:anthropic/claude-sonnet-4-20250514", "pi", []string{"--mode", "rpc", "--model", "anthropic/claude-sonnet-4-20250514"}, []string{"--no-session", "--thinking", "--no-tools", "--no-skills"}},
@@ -147,5 +148,21 @@ func TestResumeArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMuseAnyModelForwards(t *testing.T) {
+	// Muse forwards any model id verbatim; a new release must not need a
+	// code change here. The CLI validates resolvability.
+	for _, model := range []string{"muse-ember-1.0", "muse-ember-2.0", "muse-future-9"} {
+		a := &Agent{Provider: "muse:" + model + "@high"}
+		cmd, err := DefaultCommand(context.Background(), a)
+		if err != nil {
+			t.Fatalf("DefaultCommand(%s): %v", model, err)
+		}
+		argv := strings.Join(cmd.Args, " ")
+		if !strings.Contains(argv, "--model "+model) {
+			t.Errorf("argv missing --model %s: %s", model, argv)
+		}
 	}
 }
