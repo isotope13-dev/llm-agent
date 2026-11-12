@@ -9,7 +9,7 @@ import (
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
 // IncludeDirs, Model, TmpDir, Env, and ExtraArgs. It supports the providers
 // cyclotron uses today: claude, agy (alias: gemini), codex, opencode, pi,
-// cursor, muse.
+// cursor, muse, ds4 (alias: ds4-agent).
 //
 // The returned command:
 //   - reads its prompt from stdin (agy as one stream-json message; cursor and
@@ -133,6 +133,9 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		cmd := exec.CommandContext(ctx, "pi", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil
+
+	case "ds4", "ds4-agent":
+		return ds4Command(ctx, agent)
 
 	case "muse":
 		// Muse Code's headless mode. Approval and an OS sandbox are both on by

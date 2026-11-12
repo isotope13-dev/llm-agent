@@ -216,7 +216,9 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 	if extra := resumeArgs(a.Provider, sessionID); extra != nil {
 		cmd.Args = append(cmd.Args, extra...)
 	}
-	cmd.Dir = workdir
+	if err := setCmdWorkdir(a.Provider, cmd, workdir); err != nil {
+		return nil, err
+	}
 	addTrustedWorkdirArg(a.Provider, cmd)
 
 	if name := promptFile(a.Provider); name != "" {
@@ -481,9 +483,10 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	// an alternative -- it would drop a file into a repository the caller is
 	// about to inspect for changes, and hand muse that tree as its workspace
 	// root. So the probe gets a temp directory that lives exactly as long as
-	// it does. Providers that take the prompt on stdin keep the inherited cwd
-	// they have always probed in.
-	if name := promptFile(a.Provider); name != "" {
+	// it does. DS4 also gets a temporary tools workspace, while its launch
+	// directory stays beside the binary for loading runtime assets. Other
+	// stdin providers keep the inherited cwd they have always probed in.
+	if name := promptFile(a.Provider); name != "" || usesDS4(a.Provider) {
 		dir, mkErr := os.MkdirTemp(a.TmpDir, "llmagent-probe-")
 		if mkErr != nil {
 			return fmt.Errorf("probe %s workdir: %w", a.Provider, mkErr)
@@ -496,10 +499,14 @@ func (a *Agent) runProbe(ctx context.Context) error {
 					slog.String("provider", a.Provider), slog.Any("error", rmErr))
 			}
 		}()
-		if wErr := os.WriteFile(filepath.Join(dir, name), []byte(a.probePrompt()), 0o600); wErr != nil {
-			return fmt.Errorf("probe %s write %s: %w", a.Provider, name, wErr)
+		if name != "" {
+			if wErr := os.WriteFile(filepath.Join(dir, name), []byte(a.probePrompt()), 0o600); wErr != nil {
+				return fmt.Errorf("probe %s write %s: %w", a.Provider, name, wErr)
+			}
 		}
-		cmd.Dir = dir
+		if dirErr := setCmdWorkdir(a.Provider, cmd, dir); dirErr != nil {
+			return fmt.Errorf("probe %s workdir: %w", a.Provider, dirErr)
+		}
 	}
 	a.logger().Info("llmagent probe starting",
 		slog.String("provider", a.Provider),

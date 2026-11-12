@@ -32,7 +32,7 @@ type Runner struct {
 	Agents []*Agent
 
 	// LocalCooldown overrides the blacklist duration for local providers
-	// (opencode, pi). Zero means 15 min.
+	// (opencode, pi, ds4). Zero means 15 min.
 	LocalCooldown time.Duration
 
 	// TransientBackoff overrides the base delay before a same-provider retry

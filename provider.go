@@ -45,7 +45,7 @@ func Effort(provider string) string {
 // needs a longer probe budget and shorter blacklist than cloud agents.
 func IsLocal(provider string) bool {
 	switch Base(provider) {
-	case "opencode", "pi":
+	case "opencode", "pi", "ds4", "ds4-agent":
 		return true
 	}
 	return false

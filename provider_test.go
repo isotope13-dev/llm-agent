@@ -16,6 +16,9 @@ func TestBaseAndModel(t *testing.T) {
 		{"pi", "pi", "", true},
 		{"pi:some-model", "pi", "some-model", true},
 		{"codex", "codex", "", false},
+		{"ds4", "ds4", "", true},
+		{"ds4:/models/test.gguf@75", "ds4", "/models/test.gguf", true},
+		{"ds4-agent", "ds4-agent", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

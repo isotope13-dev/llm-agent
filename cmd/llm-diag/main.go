@@ -25,6 +25,7 @@ var localProviders = []localProvider{
 	{name: "opencode", bin: "opencode"},
 	{name: "pi", bin: "pi"},
 	{name: "muse", bin: "muse"},
+	{name: "ds4", bin: "ds4-agent"},
 }
 
 func main() {
@@ -57,6 +58,9 @@ func probeLocalProviders(ctx context.Context, providers []localProvider, showAll
 	rows := make([]row, 0, len(providers))
 	for _, p := range providers {
 		path, err := exec.LookPath(p.bin)
+		if err != nil && p.name == "ds4" {
+			path, err = exec.LookPath("../ds4/ds4-agent")
+		}
 		if err != nil {
 			if showAll {
 				rows = append(rows, row{provider: p.name, binary: p.bin, status: "missing", detail: err.Error()})
