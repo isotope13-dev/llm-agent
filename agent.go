@@ -900,9 +900,27 @@ func probeOutputDetail(stdout, stderr string) string {
 }
 
 func killProcess(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		_ = cmd.Process.Kill() //nolint:errcheck // best effort
+	signalProcess(cmd, syscall.SIGKILL)
+}
+
+// signalProcess delivers sig to cmd's process, or to its whole process group
+// when the caller started it as a group leader (SysProcAttr.Setpgid). Probe
+// stops a provider mid-startup, and launchers such as cursor's `agent` hand
+// the real work to a child; signalling only the leader orphaned that child.
+// The orphan outlived the probe's deleted workdir, so it went looking for the
+// PROMPT.md it had been told to follow across the whole filesystem, for hours.
+func signalProcess(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd.Process == nil {
+		return nil
 	}
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid && cmd.SysProcAttr.Pgid == 0 {
+		// The leader may already be reaped; the group id stays valid while any
+		// member lives, which is the case worth signalling.
+		if err := syscall.Kill(-cmd.Process.Pid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+	}
+	return cmd.Process.Signal(sig)
 }
 
 // stopGrace bounds how long stopProcess waits for a provider to unwind after
@@ -929,7 +947,7 @@ func stopProcess(cmd *exec.Cmd) error {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := signalProcess(cmd, syscall.SIGTERM); err != nil {
 		// Already gone, or unsignalable: either way Wait is the answer.
 		return <-done
 	}
@@ -943,11 +961,9 @@ func stopProcess(cmd *exec.Cmd) error {
 }
 
 func killAndReap(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		// The subprocess may already have exited; either way we just want
-		// it gone, so we discard kill/wait errors.
-		_ = cmd.Process.Kill() //nolint:errcheck // best effort
-	}
+	// The subprocess may already have exited; either way we just want it gone,
+	// so we discard kill/wait errors.
+	killProcess(cmd)
 	_ = cmd.Wait() //nolint:errcheck // reap zombie, error expected after Kill
 }
 
