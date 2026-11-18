@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,19 +112,60 @@ func TestRunCancellation(t *testing.T) {
 	}
 }
 
-func TestRunCursorWritesPromptFile(t *testing.T) {
-	a := preProbed("cursor", `[ -f PROMPT.md ] && cat PROMPT.md && echo done`)
-	dir := t.TempDir()
-	res, err := a.Run(context.Background(), "hello cursor", dir, RunOptions{})
+func TestRunCursorStreamsPrompt(t *testing.T) {
+	a := preProbed("cursor", `test ! -e PROMPT.md && cat`)
+	prompt := strings.Repeat("padding\n", 28_000) + "end of prompt\n"
+	res, err := a.Run(context.Background(), prompt, t.TempDir(), RunOptions{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(res.Output, "hello cursor") {
-		t.Errorf("Output = %q", res.Output)
+	if res.Output != prompt {
+		t.Errorf("received %d prompt bytes, want %d", len(res.Output), len(prompt))
 	}
 }
 
-// muse takes its prompt the same way, under its own name, and takes nothing on
+func TestMusePromptTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name, prompt, env string
+		wantFile          bool
+	}{
+		{name: "argument", prompt: "--literal prompt\nsecond line"},
+		{name: "large prompt", prompt: strings.Repeat("x", musePromptArgBudget), wantFile: true},
+		{name: "large environment", prompt: "small prompt", env: strings.Repeat("x", musePromptArgBudget), wantFile: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			a := &Agent{Provider: "muse", NewCmd: func(ctx context.Context, a *Agent) (*exec.Cmd, error) {
+				cmd, err := DefaultCommand(ctx, a)
+				if err != nil {
+					return nil, err
+				}
+				cmd.Env = []string{"TEST_ENV=" + tc.env}
+				return cmd, nil
+			}}
+			cmd, err := a.buildCmd(context.Background(), dir, tc.prompt, "existing-session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "MUSE_PROMPT.md"))
+			if tc.wantFile {
+				if err != nil || string(b) != tc.prompt {
+					t.Fatalf("prompt file missing or changed: %v", err)
+				}
+				return
+			}
+			if !os.IsNotExist(err) {
+				t.Fatalf("expected no prompt file, got %v", err)
+			}
+			want := []string{"--session-id", "existing-session", "--", tc.prompt}
+			if !slices.Equal(cmd.Args[len(cmd.Args)-len(want):], want) || slices.Contains(cmd.Args, "--prompt-file") {
+				t.Fatalf("unexpected Muse arguments: %q", cmd.Args)
+			}
+		})
+	}
+}
+
+// Muse reads a prompt file and takes nothing on
 // stdin: a provider that reads a prompt file must not also be fed one, or a
 // prompt past the pipe buffer parks feedStdin until the subprocess exits. The
 // stub reads stdin to EOF to prove Run closed it without writing.

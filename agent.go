@@ -221,7 +221,7 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 	}
 	addTrustedWorkdirArg(a.Provider, cmd)
 
-	if name := promptFile(a.Provider); name != "" {
+	if name := promptFile(a.Provider); name != "" && !useMusePromptArgument(cmd, prompt) {
 		path := filepath.Join(workdir, name)
 		if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
 			return nil, fmt.Errorf("llmagent: write %s: %w", path, err)
@@ -281,8 +281,8 @@ func makePipes(cmd *exec.Cmd) (cmdPipes, error) {
 // frames it as one stream-json message; every other provider takes it
 // verbatim. Pi uses feedPi (in pi.go), which speaks JSON-RPC instead.
 //
-// The providers that already got the prompt as a file get an immediate close
-// and nothing else. They do not read stdin at all, so writing to it would fill
+// Muse receives its prompt through argv or a file. Close stdin immediately.
+// Muse does not read the prompt from stdin, so writing to it would fill
 // the pipe buffer and park this goroutine until the subprocess exits -- which a
 // prompt under 64 KiB hides and a larger one does not.
 func (a *Agent) feedStdin(stdin io.WriteCloser, prompt string) {
@@ -473,20 +473,10 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", a.Provider, err)
 	}
-	// A prompt-file provider is handed --prompt-file on its argv and reads
-	// stdin not at all, so the probe has to write that file or the process
-	// exits before it produces a line: `muse exec` reported "failed to read
-	// --prompt-file MUSE_PROMPT.md" on every probe, and the chain blacklisted
-	// its own head for twenty minutes a round, on every model, for as long as
-	// this was missing. Run writes the file into the caller's workdir; the
-	// probe has no workdir of its own, and inheriting the caller's cwd is not
-	// an alternative -- it would drop a file into a repository the caller is
-	// about to inspect for changes, and hand muse that tree as its workspace
-	// root. So the probe gets a temp directory that lives exactly as long as
-	// it does. DS4 also gets a temporary tools workspace, while its launch
-	// directory stays beside the binary for loading runtime assets. Other
-	// stdin providers keep the inherited cwd they have always probed in.
-	if name := promptFile(a.Provider); name != "" || usesDS4(a.Provider) {
+	// Give Muse and Cursor probes an empty workspace and keep any prompt
+	// file out of the repository. DS4 uses the directory for tools while
+	// launching beside its binary to find runtime assets.
+	if name := promptFile(a.Provider); name != "" || usesDS4(a.Provider) || Base(a.Provider) == "cursor" {
 		dir, mkErr := os.MkdirTemp(a.TmpDir, "llmagent-probe-")
 		if mkErr != nil {
 			return fmt.Errorf("probe %s workdir: %w", a.Provider, mkErr)
@@ -499,7 +489,7 @@ func (a *Agent) runProbe(ctx context.Context) error {
 					slog.String("provider", a.Provider), slog.Any("error", rmErr))
 			}
 		}()
-		if name != "" {
+		if name != "" && !useMusePromptArgument(cmd, a.probePrompt()) {
 			if wErr := os.WriteFile(filepath.Join(dir, name), []byte(a.probePrompt()), 0o600); wErr != nil {
 				return fmt.Errorf("probe %s write %s: %w", a.Provider, name, wErr)
 			}
@@ -528,6 +518,11 @@ func (a *Agent) runProbe(ctx context.Context) error {
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("probe %s stderr: %w", a.Provider, err)
+	}
+	// Probes are stopped as soon as they emit output. Isolate the launcher
+	// and its children so stopping it cannot leave a Cursor agent behind.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("probe %s start %s: %w", a.Provider, describeCmd(cmd), err)
@@ -953,6 +948,10 @@ func stopProcess(cmd *exec.Cmd) error {
 	}
 	select {
 	case err := <-done:
+		// The leader can exit before a child which ignores SIGTERM.
+		if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid && cmd.SysProcAttr.Pgid == 0 {
+			killProcess(cmd)
+		}
 		return err
 	case <-time.After(stopGrace):
 	}

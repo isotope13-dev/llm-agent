@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
+	"strings"
 )
 
 // DefaultCommand builds the *exec.Cmd that invokes provider with the agent's
@@ -12,11 +14,11 @@ import (
 // cursor, muse, ds4 (alias: ds4-agent).
 //
 // The returned command:
-//   - reads its prompt from stdin (agy as one stream-json message; cursor and
-//     muse read a file in the workdir, written by Run -- see promptFile);
+//   - reads its prompt from stdin (agy as one stream-json message), except
+//     Muse, which takes an argument or a regular file (see useMusePromptArgument);
 //   - has TmpDir injected as TMPDIR/TMP/TEMP via Env;
 //   - has any Agent.ExtraArgs appended after the built-in flags (and before
-//     a trailing positional, e.g. codex's `-` or cursor's prompt argument);
+//     a trailing positional, e.g. codex's `-`);
 //   - has stdin/stdout/stderr left for the caller to wire pipes onto.
 //
 // To support a new provider, write a custom NewCmd on Agent.
@@ -173,8 +175,8 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 		return cmd, nil
 
 	case "cursor":
-		// Cursor's agent binary takes the prompt as a positional argv;
-		// Run writes PROMPT.md into the workdir.
+		// In print mode, Cursor reads the prompt from stdin when the
+		// positional prompt is omitted.
 		m := model
 		if m == "" {
 			m = "auto"
@@ -186,7 +188,6 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 			"--model", m,
 		}
 		args = append(args, agent.ExtraArgs...)
-		args = append(args, "Follow the instructions in PROMPT.md exactly")
 		cmd := exec.CommandContext(ctx, "agent", args...)
 		cmd.Env = agent.processEnv()
 		return cmd, nil
@@ -194,22 +195,50 @@ func DefaultCommand(ctx context.Context, agent *Agent) (*exec.Cmd, error) {
 	return nil, fmt.Errorf("llmagent: unknown provider %q", agent.Provider)
 }
 
-// promptFile returns the workdir-relative file a provider reads its prompt
-// from, or "" for the providers that take it on stdin. Cursor's argv points its
-// agent at PROMPT.md; `muse exec` takes --prompt-file and refuses a pipe
-// outright ("--prompt-file /dev/stdin is not a regular file"), leaving argv as
-// the only alternative and ARG_MAX as the reason not to use it.
+// promptFile returns the workdir-relative file used when a provider cannot
+// receive its prompt on stdin and an argument is unsuitable. Muse rejects
+// --prompt-file /dev/stdin because the path must be a regular file.
 //
 // Run writes the file before starting the command and leaves it in place, since
 // deleting it while the subprocess may still be reading loses the prompt.
 func promptFile(provider string) string {
 	switch Base(provider) {
-	case "cursor":
-		return "PROMPT.md"
 	case "muse":
 		return "MUSE_PROMPT.md"
 	}
 	return ""
+}
+
+// musePromptArgBudget leaves room for launcher overhead and stays below
+// Linux's per-argument limit on systems with 4 KiB pages. Include the existing
+// arguments and environment to leave headroom under the total exec limit too.
+const musePromptArgBudget = 64 * 1024
+
+// useMusePromptArgument replaces the standard Muse file option after resume
+// and workspace flags have been added. A custom command that does not use the
+// standard option keeps the existing file contract.
+func useMusePromptArgument(cmd *exec.Cmd, prompt string) bool {
+	if len(prompt) >= musePromptArgBudget || strings.ContainsRune(prompt, 0) || strings.TrimSpace(prompt) == "" {
+		return false
+	}
+	fileOpt := slices.Index(cmd.Args, "--prompt-file")
+	if fileOpt < 0 || fileOpt+1 >= len(cmd.Args) || cmd.Args[fileOpt+1] != promptFile("muse") ||
+		slices.Contains(cmd.Args[fileOpt+2:], "--prompt-file") {
+		return false
+	}
+	// Count each string's NUL and leave space for its pointer.
+	bytes := len(prompt) + len("--") + 18
+	for _, args := range [][]string{cmd.Args, cmd.Environ()} {
+		for _, arg := range args {
+			bytes += len(arg) + 9
+			if bytes > musePromptArgBudget {
+				return false
+			}
+		}
+	}
+	cmd.Args = slices.Delete(cmd.Args, fileOpt, fileOpt+2)
+	cmd.Args = append(cmd.Args, "--", prompt)
+	return true
 }
 
 // resumeArgs returns CLI flags to resume sessionID for an existing provider,

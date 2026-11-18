@@ -26,7 +26,7 @@ func TestDefaultCommand(t *testing.T) {
 		{"opencode", "opencode", []string{"run", "--format", "json", "--auto"}, []string{"--model", "--variant"}},
 		{"opencode:opencode/deepseek-v4-flash", "opencode", []string{"--model", "opencode/deepseek-v4-flash"}, nil},
 		{"opencode:opencode/deepseek-v4-pro@high", "opencode", []string{"--model", "opencode/deepseek-v4-pro", "--variant", "high"}, nil},
-		{"cursor", "agent", []string{"--model", "auto", "Follow the instructions in PROMPT.md exactly"}, nil},
+		{"cursor", "agent", []string{"--model", "auto"}, []string{"PROMPT.md"}},
 		// muse's approval prompt and namespace sandbox are both on by default
 		// and both block an unattended run. --yolo would take those two plus
 		// trusting the workspace, which is the caller's call, not ours.
