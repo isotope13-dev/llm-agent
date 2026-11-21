@@ -199,6 +199,8 @@ func TestExtractSessionID(t *testing.T) {
 		{"muse", `{"record_type":"event","stream":{"kind":"session","id":"s4"},"payload_type":"tool.result"}`, "s4"},
 		{"muse run stream is not the session", `{"stream":{"kind":"run","id":"r1"}}`, ""},
 		{"stream is not an object", `{"stream":true,"session_id":"s5"}`, "s5"},
+		{"codex", `{"type":"thread.started","thread_id":"01a1fc3b-7e1f-7552-8733-0dfc53baec2b"}`, "01a1fc3b-7e1f-7552-8733-0dfc53baec2b"},
+		{"thread_id outside thread.started", `{"type":"item.completed","thread_id":"t9"}`, ""},
 		{"none", `{"type":"result"}`, ""},
 		{"not json", `oops`, ""},
 	}

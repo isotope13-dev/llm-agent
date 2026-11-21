@@ -213,13 +213,16 @@ func (a *Agent) buildCmd(ctx context.Context, workdir, prompt, sessionID string)
 	if err != nil {
 		return nil, err
 	}
+	resumed := Base(a.Provider) == "codex" && codexResume(cmd, sessionID)
 	if extra := resumeArgs(a.Provider, sessionID); extra != nil {
 		cmd.Args = append(cmd.Args, extra...)
 	}
 	if err := setCmdWorkdir(a.Provider, cmd, workdir); err != nil {
 		return nil, err
 	}
-	addTrustedWorkdirArg(a.Provider, cmd)
+	if !resumed {
+		addTrustedWorkdirArg(a.Provider, cmd)
+	}
 
 	if name := promptFile(a.Provider); name != "" && !useMusePromptArgument(cmd, prompt) {
 		path := filepath.Join(workdir, name)
@@ -967,8 +970,9 @@ func killAndReap(cmd *exec.Cmd) {
 }
 
 // extractSessionID parses one stream-json line and returns its sessionID,
-// session_id, conversation_id (agy), or the id of the session stream the record
-// belongs to (muse), whichever is present. All providers cyclotron supports emit
+// session_id, conversation_id (agy), the thread_id of codex's thread.started
+// event, or the id of the session stream the record belongs to (muse),
+// whichever is present. All providers cyclotron supports emit
 // one of these on session-bearing events.
 //
 // muse's is nested because its output is an event-sourced record log rather than
@@ -978,6 +982,8 @@ func killAndReap(cmd *exec.Cmd) {
 // the whole line's decode and silently cost every provider its session.
 func extractSessionID(line string) string {
 	var ev struct {
+		Type           string          `json:"type"`
+		ThreadID       string          `json:"thread_id"`
 		SessionID      string          `json:"sessionID"`
 		SID            string          `json:"session_id"`
 		ConversationID string          `json:"conversation_id"`
@@ -993,6 +999,8 @@ func extractSessionID(line string) string {
 		return ev.SID
 	case ev.ConversationID != "":
 		return ev.ConversationID
+	case ev.Type == "thread.started" && ev.ThreadID != "":
+		return ev.ThreadID // codex
 	}
 	var stream struct {
 		Kind string `json:"kind"`

@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -164,5 +165,35 @@ func TestMuseAnyModelForwards(t *testing.T) {
 		if !strings.Contains(argv, "--model "+model) {
 			t.Errorf("argv missing --model %s: %s", model, argv)
 		}
+	}
+}
+
+// codex resumes through a subcommand and the subcommand takes no --add-dir.
+// Everything else the standard command says must carry over, or the resumed
+// run would lose its model, effort, or sandbox setting.
+func TestCodexResumeCommand(t *testing.T) {
+	a := &Agent{Provider: "codex:gpt-6-luna@high", IncludeDirs: []string{"/scratch"}}
+	const base = "exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox"
+	for _, tt := range []struct{ name, sid, want string }{
+		{"fresh", "", "codex " + base + " --add-dir /scratch --model gpt-6-luna -c model_reasoning_effort=high --add-dir . -"},
+		{"resume", "uuid-1", "codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --model gpt-6-luna -c model_reasoning_effort=high uuid-1 -"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, err := a.buildCmd(context.Background(), t.TempDir(), "prompt", tt.sid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(cmd.Args, " "); got != tt.want {
+				t.Errorf("argv:\n got %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// A caller's own command need not be `codex exec`; it keeps its own contract.
+func TestCodexResumeLeavesOtherCommandsAlone(t *testing.T) {
+	cmd := exec.Command("codex", "app-server")
+	if codexResume(cmd, "uuid-1") || strings.Join(cmd.Args, " ") != "codex app-server" {
+		t.Errorf("rewrote a command that is not codex exec: %v", cmd.Args)
 	}
 }

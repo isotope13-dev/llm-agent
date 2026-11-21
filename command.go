@@ -242,8 +242,8 @@ func useMusePromptArgument(cmd *exec.Cmd, prompt string) bool {
 }
 
 // resumeArgs returns CLI flags to resume sessionID for an existing provider,
-// or nil if the provider does not support explicit session IDs. codex is
-// excluded because it emits no resumable session ID.
+// or nil if the provider does not support explicit session IDs. codex resumes
+// through a subcommand rather than a flag; see codexResume.
 func resumeArgs(provider, sessionID string) []string {
 	if sessionID == "" {
 		return nil
@@ -267,4 +267,32 @@ func resumeArgs(provider, sessionID string) []string {
 		return []string{"--session-id", sessionID}
 	}
 	return nil
+}
+
+// codexResume rewrites a standard codex command to continue sessionID, and
+// reports whether it did. codex resumes through a subcommand,
+// `codex exec resume [options] <id> <prompt>`, which takes the same options
+// except --add-dir. Those directories are only a sandbox allow-list, and the
+// standard command runs with the sandbox off. A caller's own command, which
+// need not be `codex exec`, keeps its own resume contract.
+func codexResume(cmd *exec.Cmd, sessionID string) bool {
+	args := cmd.Args
+	if sessionID == "" || len(args) < 2 || args[1] != "exec" {
+		return false
+	}
+	rest := args[2:]
+	var prompt []string
+	if n := len(rest); n > 0 && rest[n-1] == "-" {
+		rest, prompt = rest[:n-1], []string{"-"}
+	}
+	out := []string{args[0], "exec", "resume"}
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == "--add-dir" && i+1 < len(rest) {
+			i++
+			continue
+		}
+		out = append(out, rest[i])
+	}
+	cmd.Args = append(append(out, sessionID), prompt...)
+	return true
 }
